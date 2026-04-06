@@ -1,0 +1,39 @@
+name: EAS Build
+
+on:
+  push:
+    branches: [v1]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+
+      - run: npm ci
+
+      - run: npm install -g eas-cli
+
+      - name: EAS Android Build
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas build -p android --profile internal
+
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: al-toppe-apk
+          path: dist/*

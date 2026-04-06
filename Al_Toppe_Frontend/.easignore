@@ -1,0 +1,8 @@
+.git
+dist
+.cache
+build
+*.log
+android
+.vscode
+

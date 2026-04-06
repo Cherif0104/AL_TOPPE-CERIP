@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Al-toppe",
+    "slug": "al-toppe",
+    "owner": "wolofdig",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/logo.jpg",
+    "scheme": "al-toppe",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash.jpg",
+      "resizeMode": "contain",
+      "backgroundColor": "#22C55E"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.wolofdig.Altoppe",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.wolofdig.altoppe"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/logo.jpg"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      "expo-splash-screen"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "13bd4966-27b8-430a-acb2-4ede15a4965a"
+      }
+    }
+  }
+}

@@ -1,0 +1,129 @@
+name: 🚀 AL-TOPPE CI/CD
+
+on:
+  push:
+    branches: [main, prod]
+  pull_request:
+    branches: [main, prod]
+
+env:
+  PYTHON_VERSION: '3.11'
+  DJANGO_ENV: 'test'
+
+jobs:
+  tests:
+    name: 🧪 Tests Django
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: altoppe_user
+          POSTGRES_PASSWORD: Bamsachine97@123
+          POSTGRES_DB: altoppe
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_prod.txt
+        pip install pytest pytest-django coverage
+
+    - name: 🗃️ Setup test environment
+      run: |
+        echo "DEBUG=False" >> .env.test
+        echo "SECRET_KEY=test-key-for-github-actions-only" >> .env.test
+        echo "DB_NAME=altoppe" >> .env.test
+        echo "DB_USER=altoppe_user" >> .env.test
+        echo "DB_PASSWORD=Bamsachine97@123" >> .env.test
+        echo "DB_HOST=localhost" >> .env.test
+        echo "DB_PORT=5432" >> .env.test
+
+    - name: 🗄️ Run migrations
+      env:
+        DJANGO_SETTINGS_MODULE: altoppe.settings
+      run: |
+        python manage.py migrate
+
+  deploy-production:
+    name: 🚀 Déploiement Production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/prod'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🚀 Deploy with Docker
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          script: |
+            set -e
+            echo "🚀 Déploiement en cours sur $HOSTNAME..."
+
+            cd /var/www/al-toppe
+            echo "📥 Fetch du code..."
+            git fetch origin production-deploy
+            git reset --hard origin/production-deploy
+
+            echo "🧹 Nettoyage Docker..."
+            docker-compose down
+
+            echo "🐳 Reconstruction des images..."
+            docker-compose build --no-cache web
+
+            echo "🚀 Démarrage de la base et de Redis..."
+            docker-compose up -d db redis
+            echo "⏳ Attente de la disponibilité de Postgres..."
+            sleep 20
+            docker-compose exec db pg_isready -U $POSTGRES_USER || true
+
+            echo "🌍 Démarrage du backend..."
+            docker-compose -f docker-compose.prod.yml up -d
+            
+            echo "🗃️ Application des migrations..."
+            docker-compose exec web python manage.py migrate --noinput
+
+            echo "📦 Collecte des fichiers statiques..."
+            docker-compose exec web python manage.py collectstatic --noinput
+
+            echo "🔧 Démarrage NGINX..."
+            docker-compose up -d nginx
+            docker-compose -f docker-compose.prod.yml up -d
+
+            echo "✅ Vérification des services..."
+            docker-compose ps
+            
+            echo "🔄 Récupération des logs..."
+            docker logs -f al-toppe-web-1
+            docker logs -f al-toppe-nginx-1
+            docker logs -f al-toppe-redis-1
+            docker logs -f al-toppe-db-1
+
+            echo "💚 Health check..."
+            curl -f http://localhost:8000/health/ || echo "⚠️ Health endpoint non disponible"
+
+            echo "🎉 Déploiement terminé avec succès!"
+            echo "🔄 Récupération des logs de l'application..."
+            docker logs -f al-toppe-web-1
+

@@ -1,0 +1,40 @@
+# Secrets locaux (ne jamais committer)
+.env
+!.env.example
+!.env.production.example
+
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*/__pycache__/
+.expo/
+
+
+# Django : versionner les fichiers migrations/*.py (schéma DB partagé entre devs)
+
+# Environnements virtuels
+venv/
+.env/
+/core/.env/
+/core/.env
+# MacOS
+.DS_Store
+
+# Médias utilisateurs
+# /media/
+
+# Log files
+*.log
+
+# JetBrains IDE (PyCharm, IntelliJ, etc.)
+.idea/
+*.iml
+
+# VSCode
+.vscode/
+
+# System files
+Thumbs.db
+
+.qodo

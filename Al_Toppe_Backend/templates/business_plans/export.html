@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plan d'Affaires - {{ plan.title }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #333;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #27ae60;
+        }
+        
+        h1 {
+            font-size: 24pt;
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        
+        h2 {
+            font-size: 16pt;
+            color: #27ae60;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #27ae60;
+            padding-bottom: 5px;
+        }
+        
+        .header-info {
+            background-color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 30px;
+        }
+        
+        .info-row {
+            margin-bottom: 8px;
+        }
+        
+        .info-label {
+            font-weight: bold;
+            color: #555;
+        }
+        
+        .section {
+            margin-bottom: 25px;
+            page-break-inside: avoid;
+        }
+        
+        .question-item {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #27ae60;
+        }
+        
+        .question-label {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+        
+        .answer-content {
+            color: #555;
+            margin-left: 10px;
+        }
+        
+        .list-item {
+            margin-left: 20px;
+            margin-bottom: 5px;
+        }
+        
+        .financial-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px;
+            background-color: #f8f9fa;
+            margin-bottom: 5px;
+        }
+        
+        .financial-label {
+            font-weight: bold;
+        }
+        
+        .financial-value {
+            color: #27ae60;
+            font-weight: bold;
+        }
+        
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #777;
+            font-size: 9pt;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ plan.title }}</h1>
+        <p style="color: #777; font-size: 12pt;">Plan d'Affaires</p>
+    </div>
+    
+    <div class="header-info">
+        <div class="info-row">
+            <span class="info-label">Entrepreneur :</span> {{ entrepreneur.full_name }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Activité :</span> {{ activity.title }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Secteur :</span> {{ activity_sector_display }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Statut :</span> {{ plan.get_status_display }}
+        </div>
+        <div class="info-row">
+            <span class="info-label">Date de génération :</span> {{ date }}
+        </div>
+    </div>
+    
+    {% if summary %}
+    <div class="section">
+        <h2>Résumé Exécutif</h2>
+        <div style="margin-left: 20px;">
+            <p>{{ summary }}</p>
+        </div>
+    </div>
+    {% elif plan.summary %}
+    <div class="section">
+        <h2>Résumé Exécutif</h2>
+        <div style="margin-left: 20px;">
+            <p>{{ plan.summary }}</p>
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if market_analysis %}
+    <div class="section">
+        <h2>1. Analyse de Marché</h2>
+        <div style="margin-left: 20px;" class="section-body-html">
+            {{ market_analysis_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if offer %}
+    <div class="section">
+        <h2>2. Offre et Services</h2>
+        <div style="margin-left: 20px;" class="section-body-html">
+            {{ offer_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if business_model %}
+    <div class="section">
+        <h2>3. Modèle Économique</h2>
+        <div style="margin-left: 20px;" class="section-body-html">
+            {{ business_model_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if financial_projections %}
+    <div class="section">
+        <h2>4. Projections Financières</h2>
+        <div style="margin-left: 20px;" class="section-body-html">
+            {{ financial_projections_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    
+    {% if implementation_plan %}
+    <div class="section">
+        <h2>5. Plan de Mise en Œuvre</h2>
+        <div style="margin-left: 20px;" class="section-body-html">
+            {{ implementation_plan_html|safe }}
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="footer">
+        <p>Document généré le {{ date }} par AL-TOPPE</p>
+        <p>Plan d'Affaires - Version {{ plan.version }}</p>
+    </div>
+</body>
+</html>

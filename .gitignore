@@ -1,0 +1,43 @@
+# --- Racine monorepo AL-TOPPE ---
+.DS_Store
+Thumbs.db
+*.log
+
+# Outils / IDE
+.idea/
+.vscode/
+*.swp
+.qodo/
+
+# Secrets (tous dossiers)
+.env
+!.env.example
+!.env.*.example
+**/.env
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+build/
+.npm/
+.cache/
+
+# Captures / assets locaux non versionnés (hors code)
+WhatsApp*.jpeg
+WhatsApp*.jpg
+WhatsApp*.png
+
+# Cursor / local MCP (optionnel)
+.cursor/
