@@ -65,10 +65,15 @@ Port par défaut : **3000** (`vite.config.ts`).
 
 ## Déploiement Vercel (frontend web)
 
-1. Importer le dépôt GitHub dans Vercel.
-2. **Root Directory** : `Al_Toppe_Web`
-3. **Framework** : Vite (détection auto) — **Build** : `npm run build` — **Output** : `dist`
-4. Variables d’environnement : copier depuis `.env.example` (`VITE_*` uniquement), notamment `VITE_API_BASE_URL` pointant vers ton API déployée (HTTPS).
+Le dépôt est un **monorepo** : la webapp est dans `Al_Toppe_Web/`.
+
+**Option A (recommandée avec ce repo)** : ne rien changer de spécial dans l’UI Vercel pour le dossier racine — un fichier **`vercel.json` à la racine** du dépôt lance `install` / `build` dans `Al_Toppe_Web` et publie `Al_Toppe_Web/dist`.
+
+**Option B** : dans Vercel → Project → Settings → General → **Root Directory** = `Al_Toppe_Web`, puis Framework Vite, build `npm run build`, output `dist`.
+
+Dans les deux cas, ajoute les variables d’environnement **`VITE_*`** (voir `Al_Toppe_Web/.env.example`), surtout `VITE_API_BASE_URL` vers ton API Django en HTTPS.
+
+Si tu voyais **404 NOT_FOUND** sur l’URL `*.vercel.app`, c’était en général : mauvaise racine de build (rien dans `dist`) ou build en échec — vérifie l’onglet **Deployments → Build Logs**.
 
 Le backend Django doit être hébergé ailleurs (Railway, Render, VPS, etc.) avec CORS autorisé vers l’URL Vercel.
 

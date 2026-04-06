@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "cd Al_Toppe_Web && npm install",
+  "buildCommand": "cd Al_Toppe_Web && npm run build",
+  "outputDirectory": "Al_Toppe_Web/dist"
+}
