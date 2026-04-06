@@ -3,8 +3,14 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Phone, Lock, LogIn, AlertCircle, FlaskConical, Mail } from 'lucide-react';
+import { Phone, Lock, LogIn, AlertCircle, FlaskConical, Mail, ChevronDown } from 'lucide-react';
 import { Alert, AlertDescription } from './ui/alert';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from './ui/collapsible';
+import { cn } from '@/lib/utils';
 import { apiService, User } from '../services/api';
 import { NetworkError } from '../services/errorHandler';
 import { isSupabaseAuthActive } from '@/config';
@@ -12,6 +18,8 @@ import { signInWithEmailPassword } from '@/services/supabaseAuth';
 import {
   DEV_TEST_ACCOUNTS,
   DEV_TEST_LOGIN_PASSWORD,
+  getSupabaseTestPassword,
+  resolveSupabaseTestEmail,
   type DevTestAccountKey,
 } from '../config/devTestAccounts';
 
@@ -19,6 +27,11 @@ const useSupabaseLogin = isSupabaseAuthActive();
 
 const enableQuickTestLogin =
   !useSupabaseLogin &&
+  (import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_LOGIN === 'true');
+
+/** Comptes de démo Supabase (même flag que Django : dev ou VITE_ENABLE_TEST_LOGIN). */
+const enableSupabaseQuickTest =
+  useSupabaseLogin &&
   (import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_LOGIN === 'true');
 
 const quickTestPassword =
@@ -50,11 +63,31 @@ function formatLoginError(err: unknown): string {
   return "Échec de connexion — vérifie l'API, seed_test_users et le mot de passe test.";
 }
 
+function formatSupabaseLoginError(err: unknown): string {
+  const msg =
+    err instanceof Error
+      ? err.message
+      : typeof err === "object" && err !== null && "message" in err
+        ? String((err as { message: string }).message)
+        : "";
+  const low = msg.toLowerCase();
+  if (low.includes("invalid login") || low.includes("invalid credentials")) {
+    return (
+      "Identifiants refusés — crée les utilisateurs de test dans Supabase Auth " +
+      "(emails par défaut dans devTestAccounts.ts) avec le mot de passe VITE_SUPABASE_TEST_PASSWORD " +
+      "ou celui par défaut, et user_metadata.role."
+    );
+  }
+  if (err instanceof Error) return err.message;
+  return "Échec de connexion Supabase — vérifie URL, clé anon et les comptes de test.";
+}
+
 export function LoginForm({ onLogin }: LoginFormProps) {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [testRole, setTestRole] = useState<DevTestAccountKey | ''>('');
+  const [testPanelOpen, setTestPanelOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
 
@@ -73,7 +106,7 @@ export function LoginForm({ onLogin }: LoginFormProps) {
       }
     } catch (err) {
       console.error('Erreur de connexion:', err);
-      setError(formatLoginError(err));
+      setError(useSupabaseLogin ? formatSupabaseLoginError(err) : formatLoginError(err));
     } finally {
       setIsLoading(false);
     }
@@ -246,6 +279,68 @@ export function LoginForm({ onLogin }: LoginFormProps) {
               </Button>
             </div>
           </div>
+        ) : null}
+
+        {enableSupabaseQuickTest ? (
+          <Collapsible
+            open={testPanelOpen}
+            onOpenChange={setTestPanelOpen}
+            className="mt-8 overflow-hidden rounded-lg border border-[#006666]/25 bg-[#006666]/5"
+          >
+            <CollapsibleTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-[#004d4d] outline-none hover:bg-[#006666]/10 rounded-t-lg"
+              >
+                <span className="flex items-center gap-2">
+                  <FlaskConical className="h-4 w-4 shrink-0 text-[#006666]" />
+                  Comptes de test (Supabase)
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'h-4 w-4 shrink-0 text-[#006666] transition-transform duration-200',
+                    testPanelOpen && 'rotate-180',
+                  )}
+                />
+              </button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="space-y-3 px-4 pb-4 pt-0">
+              <p className="text-xs text-slate-600">
+                Crée dans Supabase Authentication les utilisateurs avec les emails ci-dessous, le
+                mot de passe défini par{' '}
+                <code className="rounded bg-white px-1 text-[11px]">VITE_SUPABASE_TEST_PASSWORD</code>{' '}
+                (ou le défaut du code), et{' '}
+                <code className="rounded bg-white px-1 text-[11px]">user_metadata.role</code> = rôle
+                correspondant.
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-white px-3 py-2 text-sm text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:flex-1"
+                  value={testRole}
+                  onChange={(e) =>
+                    setTestRole((e.target.value || '') as DevTestAccountKey | '')
+                  }
+                  aria-label="Rôle de test Supabase"
+                >
+                  <option value="">Choisir un utilisateur de test…</option>
+                  {DEV_TEST_ACCOUNTS.map((a) => (
+                    <option key={a.key} value={a.key}>
+                      {a.label} — {resolveSupabaseTestEmail(a.key)}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full border border-[#006666]/40 bg-white text-[#006666] hover:bg-[#006666]/10 sm:w-auto"
+                  disabled={isLoading || !testRole}
+                  onClick={handleSupabaseQuickTestLogin}
+                >
+                  Se connecter
+                </Button>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
         ) : null}
 
         {/* Liens supplémentaires */}

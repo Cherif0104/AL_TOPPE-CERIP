@@ -25,7 +25,9 @@ Sur l’écran de connexion web, la section **« Connexion rapide (test) »** n�
 
 Mot de passe par défaut : voir `DEV_TEST_LOGIN_PASSWORD` dans `devTestAccounts.ts`, ou variable **`VITE_DEV_TEST_PASSWORD`** dans `.env`.
 
-En **production / preview** (ex. Vercel), tu peux afficher cette zone en définissant **`VITE_ENABLE_TEST_LOGIN=true`** (à utiliser seulement sur un environnement de démo, pas en prod publique avec données réelles).
+Avec **Supabase Auth**, un panneau déroulant **« Comptes de test (Supabase) »** permet de choisir un rôle et de se connecter avec les emails par défaut (`test-*@example.com`, surchargeables via `VITE_SUPABASE_TEST_EMAIL_*`) et **`VITE_SUPABASE_TEST_PASSWORD`** (ou défaut dans `devTestAccounts.ts`). Il faut créer les 4 utilisateurs dans Supabase Authentication avec `user_metadata.role` = `entrepreneur` | `coach` | `bailleur` | `admin`.
+
+En **production / preview** (ex. Vercel), tu peux afficher les zones de test en définissant **`VITE_ENABLE_TEST_LOGIN=true`** (démo uniquement).
 
 ## Prérequis
 
