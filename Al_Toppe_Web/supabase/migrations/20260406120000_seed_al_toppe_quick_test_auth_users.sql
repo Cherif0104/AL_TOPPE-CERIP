@@ -1,6 +1,7 @@
 -- Comptes de connexion rapide AL-TOPPE (voir src/config/supabaseQuickTest.ts)
 -- Mot de passe partagé : TestSupabase2026!
--- Déjà appliquée sur le projet Supabase via MCP ; garder ce fichier pour reproduire ailleurs (CLI ou SQL editor).
+-- GoTrue exige confirmation_token, email_change, email_change_token_new, recovery_token
+-- en chaînes vides '' (pas NULL) — sinon erreur « Database error querying schema » au login.
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
 
@@ -14,6 +15,7 @@ BEGIN
     INSERT INTO auth.users (
       instance_id, id, aud, role, email, encrypted_password,
       email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      confirmation_token, email_change, email_change_token_new, recovery_token,
       created_at, updated_at
     ) VALUES (
       '00000000-0000-0000-0000-000000000000',
@@ -25,6 +27,7 @@ BEGIN
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"entrepreneur","full_name":"Test Entrepreneur"}'::jsonb,
+      '', '', '', '',
       now(),
       now()
     );
@@ -45,6 +48,7 @@ BEGIN
     INSERT INTO auth.users (
       instance_id, id, aud, role, email, encrypted_password,
       email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      confirmation_token, email_change, email_change_token_new, recovery_token,
       created_at, updated_at
     ) VALUES (
       '00000000-0000-0000-0000-000000000000',
@@ -56,6 +60,7 @@ BEGIN
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"coach","full_name":"Test Coach"}'::jsonb,
+      '', '', '', '',
       now(),
       now()
     );
@@ -76,6 +81,7 @@ BEGIN
     INSERT INTO auth.users (
       instance_id, id, aud, role, email, encrypted_password,
       email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      confirmation_token, email_change, email_change_token_new, recovery_token,
       created_at, updated_at
     ) VALUES (
       '00000000-0000-0000-0000-000000000000',
@@ -87,6 +93,7 @@ BEGIN
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"bailleur","full_name":"Test Bailleur"}'::jsonb,
+      '', '', '', '',
       now(),
       now()
     );
@@ -107,6 +114,7 @@ BEGIN
     INSERT INTO auth.users (
       instance_id, id, aud, role, email, encrypted_password,
       email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
+      confirmation_token, email_change, email_change_token_new, recovery_token,
       created_at, updated_at
     ) VALUES (
       '00000000-0000-0000-0000-000000000000',
@@ -118,6 +126,7 @@ BEGIN
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       '{"role":"admin","full_name":"Test Admin"}'::jsonb,
+      '', '', '', '',
       now(),
       now()
     );
