@@ -12,22 +12,13 @@ Ce dépôt regroupe le nécessaire pour **reprendre le développement** : backen
 | `Al_Toppe_Web/` | Application web (React, Vite, shadcn/ui) — interface principale actuelle |
 | `Al_Toppe_Frontend/` | Application mobile **Expo** (React Native) |
 
-## Comptes de test rapide (rôles)
+## Connexion rapide (comptes Supabase)
 
-Sur l’écran de connexion web, la section **« Connexion rapide (test) »** n’apparaît **que si l’auth Supabase est désactivée** (`VITE_SUPABASE_AUTH_ENABLED=false`). Elle utilise l’API Django avec les numéros définis dans `Al_Toppe_Web/src/config/devTestAccounts.ts` (alignés sur `python manage.py seed_test_users` côté backend).
+Avec **`VITE_SUPABASE_AUTH_ENABLED=true`**, l’écran de connexion propose un panneau **« Connexion rapide (comptes Supabase) »** (en dev automatiquement ; en preview/prod : **`VITE_ENABLE_TEST_LOGIN=true`**).
 
-| Rôle | Téléphone (login test) |
-|------|-------------------------|
-| Entrepreneur | `221701001001` |
-| Coach | `221701001002` |
-| Bailleur | `221701001003` |
-| Administrateur | `221701001004` |
+Crée les 4 utilisateurs dans **Supabase → Authentication** avec les emails par défaut (`test-*@example.com`, surchargeables via `VITE_SUPABASE_TEST_EMAIL_*` — voir `Al_Toppe_Web/src/config/supabaseQuickTest.ts`), le mot de passe **`VITE_SUPABASE_TEST_PASSWORD`** (ou défaut dans ce fichier), et **`user_metadata.role`** = `entrepreneur` | `coach` | `bailleur` | `admin`.
 
-Mot de passe par défaut : voir `DEV_TEST_LOGIN_PASSWORD` dans `devTestAccounts.ts`, ou variable **`VITE_DEV_TEST_PASSWORD`** dans `.env`.
-
-Avec **Supabase Auth**, un panneau déroulant **« Comptes de test (Supabase) »** permet de choisir un rôle et de se connecter avec les emails par défaut (`test-*@example.com`, surchargeables via `VITE_SUPABASE_TEST_EMAIL_*`) et **`VITE_SUPABASE_TEST_PASSWORD`** (ou défaut dans `devTestAccounts.ts`). Il faut créer les 4 utilisateurs dans Supabase Authentication avec `user_metadata.role` = `entrepreneur` | `coach` | `bailleur` | `admin`.
-
-En **production / preview** (ex. Vercel), tu peux afficher les zones de test en définissant **`VITE_ENABLE_TEST_LOGIN=true`** (démo uniquement).
+Pour l’auth **Django** (téléphone + JWT), il n’y a plus de connexion rapide côté front : utilise des comptes réels ou `seed_test_users` en local depuis l’API.
 
 ## Prérequis
 
@@ -62,8 +53,8 @@ Port par défaut : **3000** (`vite.config.ts`).
 
 ## Authentification
 
-- **Django (téléphone + mot de passe)** : `VITE_SUPABASE_AUTH_ENABLED=false` — permet la **connexion rapide par rôle** ci-dessus.
-- **Supabase (email + mot de passe)** : renseigner `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_AUTH_ENABLED=true`. Ne pas laisser `VITE_SUPABASE_*` vides dans `.env.local` (priorité sur `.env`).
+- **Django (téléphone + mot de passe)** : `VITE_SUPABASE_AUTH_ENABLED=false` — connexion classique vers l’API ; pas de raccourci de test sur le front.
+- **Supabase (email + mot de passe)** : `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `VITE_SUPABASE_AUTH_ENABLED=true` — **connexion rapide** par rôle si les comptes existent dans Supabase (voir section ci-dessus). Ne pas laisser `VITE_SUPABASE_*` vides dans `.env.local`.
 
 ## Déploiement Vercel (frontend web)
 

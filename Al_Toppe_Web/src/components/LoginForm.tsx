@@ -3,7 +3,7 @@ import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { Phone, Lock, LogIn, AlertCircle, FlaskConical, Mail, ChevronDown } from 'lucide-react';
+import { Phone, Lock, LogIn, AlertCircle, FlaskConical, Mail, ChevronDown, Sparkles } from 'lucide-react';
 import { Alert, AlertDescription } from './ui/alert';
 import {
   Collapsible,
@@ -16,29 +16,23 @@ import { NetworkError } from '../services/errorHandler';
 import { isSupabaseAuthActive } from '@/config';
 import { signInWithEmailPassword } from '@/services/supabaseAuth';
 import {
-  DEV_TEST_ACCOUNTS,
-  DEV_TEST_LOGIN_PASSWORD,
+  SUPABASE_QUICK_TEST_ROLES,
   getSupabaseTestPassword,
   resolveSupabaseTestEmail,
-  type DevTestAccountKey,
-} from '../config/devTestAccounts';
+  type QuickTestRoleKey,
+} from '../config/supabaseQuickTest';
 
 const useSupabaseLogin = isSupabaseAuthActive();
 
-const enableQuickTestLogin =
-  !useSupabaseLogin &&
-  (import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_LOGIN === 'true');
-
-/** Comptes de démo Supabase (même flag que Django : dev ou VITE_ENABLE_TEST_LOGIN). */
-const enableSupabaseQuickTest =
+/** Connexion rapide : uniquement avec Supabase Auth (comptes créés dans le dashboard). */
+const enableQuickSupabaseLogin =
   useSupabaseLogin &&
   (import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_LOGIN === 'true');
 
-const quickTestPassword =
-  import.meta.env.VITE_DEV_TEST_PASSWORD || DEV_TEST_LOGIN_PASSWORD;
-
 interface LoginFormProps {
   onLogin: (user: User) => void;
+  /** Ouvre une courte présentation de l’application (sans compte). */
+  onOpenDemo?: () => void;
 }
 
 function formatLoginError(err: unknown): string {
@@ -49,7 +43,6 @@ function formatLoginError(err: unknown): string {
         ? err.message
         : '';
   const low = msg.toLowerCase();
-  // Connexion refusée / hors ligne → fetch() échoue souvent avec "Failed to fetch"
   if (
     low.includes('failed to fetch') ||
     (err instanceof NetworkError && err.status === 0)
@@ -60,7 +53,7 @@ function formatLoginError(err: unknown): string {
     );
   }
   if (err instanceof Error) return err.message;
-  return "Échec de connexion — vérifie l'API, seed_test_users et le mot de passe test.";
+  return "Échec de connexion — vérifie l'API et tes identifiants.";
 }
 
 function formatSupabaseLoginError(err: unknown): string {
@@ -73,21 +66,20 @@ function formatSupabaseLoginError(err: unknown): string {
   const low = msg.toLowerCase();
   if (low.includes("invalid login") || low.includes("invalid credentials")) {
     return (
-      "Identifiants refusés — crée les utilisateurs de test dans Supabase Auth " +
-      "(emails par défaut dans devTestAccounts.ts) avec le mot de passe VITE_SUPABASE_TEST_PASSWORD " +
-      "ou celui par défaut, et user_metadata.role."
+      "Identifiants refusés — crée les utilisateurs dans Supabase Auth " +
+      "(voir supabaseQuickTest.ts) avec VITE_SUPABASE_TEST_PASSWORD et user_metadata.role."
     );
   }
   if (err instanceof Error) return err.message;
-  return "Échec de connexion Supabase — vérifie URL, clé anon et les comptes de test.";
+  return "Échec de connexion Supabase — vérifie URL, clé anon et les comptes.";
 }
 
-export function LoginForm({ onLogin }: LoginFormProps) {
+export function LoginForm({ onLogin, onOpenDemo }: LoginFormProps) {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [testRole, setTestRole] = useState<DevTestAccountKey | ''>('');
-  const [testPanelOpen, setTestPanelOpen] = useState(false);
+  const [quickRole, setQuickRole] = useState<QuickTestRoleKey | ''>('');
+  const [quickPanelOpen, setQuickPanelOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');
 
@@ -112,25 +104,21 @@ export function LoginForm({ onLogin }: LoginFormProps) {
     }
   };
 
-  const handleQuickTestLogin = async () => {
-    if (!testRole) {
-      setError('Choisis un rôle de test dans le menu.');
+  const handleQuickSupabaseLogin = async () => {
+    if (!quickRole) {
+      setError('Choisis un rôle dans le menu de connexion rapide.');
       return;
     }
-    const account = DEV_TEST_ACCOUNTS.find((a) => a.key === testRole);
-    if (!account) return;
-
+    const testEmail = resolveSupabaseTestEmail(quickRole);
+    const testPwd = getSupabaseTestPassword();
     setIsLoading(true);
     setError('');
     try {
-      const response = await apiService.login({
-        phone: account.phone,
-        password: quickTestPassword,
-      });
-      onLogin(response.user);
+      const { user } = await signInWithEmailPassword(testEmail, testPwd);
+      onLogin(user);
     } catch (err) {
-      console.error('Connexion test:', err);
-      setError(formatLoginError(err));
+      console.error('Connexion rapide Supabase:', err);
+      setError(formatSupabaseLoginError(err));
     } finally {
       setIsLoading(false);
     }
@@ -139,16 +127,24 @@ export function LoginForm({ onLogin }: LoginFormProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#006666] to-[#004d4d] flex items-center justify-center p-4">
       <Card className="w-full max-w-md p-8 bg-white shadow-2xl">
-        {/* Logo et titre */}
         <div className="text-center mb-8">
           <div className="mx-auto w-16 h-16 bg-[#006666] rounded-full flex items-center justify-center mb-4">
             <span className="text-white text-2xl font-bold">AT</span>
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">AL-TOPPE</h1>
           <p className="text-gray-600">Plateforme de gestion d'entreprise</p>
+          {onOpenDemo ? (
+            <button
+              type="button"
+              onClick={onOpenDemo}
+              className="mt-4 inline-flex items-center justify-center gap-2 rounded-full border border-[#006666]/30 bg-[#006666]/5 px-4 py-2 text-sm font-medium text-[#006666] transition-colors hover:bg-[#006666]/15"
+            >
+              <Sparkles className="h-4 w-4" aria-hidden />
+              Voir la présentation de l’application
+            </button>
+          ) : null}
         </div>
 
-        {/* Message d'erreur */}
         {error && (
           <Alert className="mb-6 border-red-200 bg-red-50">
             <AlertCircle className="h-4 w-4 text-red-600" />
@@ -158,7 +154,6 @@ export function LoginForm({ onLogin }: LoginFormProps) {
           </Alert>
         )}
 
-        {/* Formulaire de connexion */}
         <form onSubmit={handleSubmit} className="space-y-6">
 
           {useSupabaseLogin ? (
@@ -178,8 +173,8 @@ export function LoginForm({ onLogin }: LoginFormProps) {
                 />
               </div>
               <p className="text-xs text-gray-500">
-                Compte Supabase Auth — rôle dans les métadonnées utilisateur (
-                <code className="text-[11px]">user_metadata.role</code>).
+                Compte Supabase Auth — rôle dans{' '}
+                <code className="text-[11px]">user_metadata.role</code>.
               </p>
             </div>
           ) : (
@@ -200,7 +195,6 @@ export function LoginForm({ onLogin }: LoginFormProps) {
             </div>
           )}
 
-          {/* Mot de passe */}
           <div className="space-y-2">
             <Label htmlFor="password">Mot de passe</Label>
             <div className="relative">
@@ -217,9 +211,8 @@ export function LoginForm({ onLogin }: LoginFormProps) {
             </div>
           </div>
 
-          {/* Bouton de connexion */}
-          <Button 
-            type="submit" 
+          <Button
+            type="submit"
             className="w-full bg-[#006666] hover:bg-[#004d4d] text-white"
             disabled={isLoading}
           >
@@ -237,93 +230,47 @@ export function LoginForm({ onLogin }: LoginFormProps) {
           </Button>
         </form>
 
-        {enableQuickTestLogin ? (
-          <div className="mt-8 p-4 bg-slate-50 rounded-lg border border-slate-200 space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium text-slate-800">
-              <FlaskConical className="h-4 w-4 text-[#006666]" />
-              <span>Connexion rapide (test)</span>
-            </div>
-            <p className="text-xs text-slate-600">
-              Choisis un rôle, puis connecte-toi sans saisir le mot de passe.
-              Les comptes viennent de{' '}
-              <code className="text-[11px] bg-slate-100 px-1 rounded">
-                seed_test_users
-              </code>{' '}
-              côté API.
-            </p>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              {/* <select> natif : évite l’erreur React/Radix removeChild sur SelectValue (connexion test) */}
-              <select
-                className="h-9 w-full rounded-md border border-input bg-white px-3 py-2 text-sm text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:flex-1"
-                value={testRole}
-                onChange={(e) =>
-                  setTestRole((e.target.value || '') as DevTestAccountKey | '')
-                }
-                aria-label="Rôle de test"
-              >
-                <option value="">Rôle de test…</option>
-                {DEV_TEST_ACCOUNTS.map((a) => (
-                  <option key={a.key} value={a.key}>
-                    {a.label}
-                  </option>
-                ))}
-              </select>
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full sm:w-auto border border-[#006666]/30 text-[#006666] hover:bg-[#006666]/10"
-                disabled={isLoading || !testRole}
-                onClick={handleQuickTestLogin}
-              >
-                Se connecter avec ce rôle
-              </Button>
-            </div>
-          </div>
-        ) : null}
-
-        {enableSupabaseQuickTest ? (
+        {enableQuickSupabaseLogin ? (
           <Collapsible
-            open={testPanelOpen}
-            onOpenChange={setTestPanelOpen}
+            open={quickPanelOpen}
+            onOpenChange={setQuickPanelOpen}
             className="mt-8 overflow-hidden rounded-lg border border-[#006666]/25 bg-[#006666]/5"
           >
             <CollapsibleTrigger asChild>
               <button
                 type="button"
-                className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-[#004d4d] outline-none hover:bg-[#006666]/10 rounded-t-lg"
+                className="flex w-full items-center justify-between gap-2 rounded-t-lg px-4 py-3 text-left text-sm font-medium text-[#004d4d] outline-none hover:bg-[#006666]/10"
               >
                 <span className="flex items-center gap-2">
                   <FlaskConical className="h-4 w-4 shrink-0 text-[#006666]" />
-                  Comptes de test (Supabase)
+                  Connexion rapide (comptes Supabase)
                 </span>
                 <ChevronDown
                   className={cn(
                     'h-4 w-4 shrink-0 text-[#006666] transition-transform duration-200',
-                    testPanelOpen && 'rotate-180',
+                    quickPanelOpen && 'rotate-180',
                   )}
                 />
               </button>
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-3 px-4 pb-4 pt-0">
               <p className="text-xs text-slate-600">
-                Crée dans Supabase Authentication les utilisateurs avec les emails ci-dessous, le
-                mot de passe défini par{' '}
-                <code className="rounded bg-white px-1 text-[11px]">VITE_SUPABASE_TEST_PASSWORD</code>{' '}
-                (ou le défaut du code), et{' '}
-                <code className="rounded bg-white px-1 text-[11px]">user_metadata.role</code> = rôle
-                correspondant.
+                Utilisateurs créés dans Supabase Authentication : même mot de passe (
+                <code className="rounded bg-white px-1 text-[11px]">VITE_SUPABASE_TEST_PASSWORD</code>
+                ) et <code className="rounded bg-white px-1 text-[11px]">user_metadata.role</code>{' '}
+                selon le rôle choisi.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <select
                   className="h-9 w-full rounded-md border border-input bg-white px-3 py-2 text-sm text-foreground shadow-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 sm:flex-1"
-                  value={testRole}
+                  value={quickRole}
                   onChange={(e) =>
-                    setTestRole((e.target.value || '') as DevTestAccountKey | '')
+                    setQuickRole((e.target.value || '') as QuickTestRoleKey | '')
                   }
-                  aria-label="Rôle de test Supabase"
+                  aria-label="Rôle pour connexion rapide Supabase"
                 >
-                  <option value="">Choisir un utilisateur de test…</option>
-                  {DEV_TEST_ACCOUNTS.map((a) => (
+                  <option value="">Choisir un compte de test…</option>
+                  {SUPABASE_QUICK_TEST_ROLES.map((a) => (
                     <option key={a.key} value={a.key}>
                       {a.label} — {resolveSupabaseTestEmail(a.key)}
                     </option>
@@ -333,8 +280,8 @@ export function LoginForm({ onLogin }: LoginFormProps) {
                   type="button"
                   variant="secondary"
                   className="w-full border border-[#006666]/40 bg-white text-[#006666] hover:bg-[#006666]/10 sm:w-auto"
-                  disabled={isLoading || !testRole}
-                  onClick={handleSupabaseQuickTestLogin}
+                  disabled={isLoading || !quickRole}
+                  onClick={handleQuickSupabaseLogin}
                 >
                   Se connecter
                 </Button>
@@ -343,14 +290,12 @@ export function LoginForm({ onLogin }: LoginFormProps) {
           </Collapsible>
         ) : null}
 
-        {/* Liens supplémentaires */}
         <div className="mt-6 text-center">
           <a href="#" className="text-sm text-[#006666] hover:underline">
             Mot de passe oublié ?
           </a>
         </div>
 
-        {/* Footer */}
         <div className="mt-8 text-center text-xs text-gray-500">
           <p>AL-TOPPE © 2024 - Votre partenaire pour entreprendre au Sénégal 🇸🇳</p>
         </div>

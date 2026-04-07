@@ -17,6 +17,7 @@ import { AdminSettings } from './components/AdminSettings';
 import { ApplicationsManagement } from './components/ApplicationsManagement';
 import { PortfolioManagement } from './components/PortfolioManagement';
 import { BusinessPlansManagement } from './components/BusinessPlansManagement';
+import { DemoPresentation } from './components/DemoPresentation';
 import { apiService, User } from './services/api';
 import { NetworkError } from './services/errorHandler';
 import { isSupabaseAuthActive } from './config';
@@ -33,6 +34,7 @@ export default function App() {
   const [pageAction, setPageAction] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showWelcome, setShowWelcome] = useState(false);
+  const [showDemoPresentation, setShowDemoPresentation] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,7 +172,19 @@ export default function App() {
     );
   }
 
-  if (!user) return <LoginForm onLogin={handleLogin} />;
+  if (!user) {
+    if (showDemoPresentation) {
+      return (
+        <DemoPresentation onClose={() => setShowDemoPresentation(false)} />
+      );
+    }
+    return (
+      <LoginForm
+        onLogin={handleLogin}
+        onOpenDemo={() => setShowDemoPresentation(true)}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
