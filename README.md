@@ -16,7 +16,7 @@ Ce dépôt regroupe le nécessaire pour **reprendre le développement** : backen
 
 Avec **`VITE_SUPABASE_AUTH_ENABLED=true`**, l’écran de connexion propose un panneau **« Connexion rapide (comptes Supabase) »** (en dev automatiquement ; en preview/prod : **`VITE_ENABLE_TEST_LOGIN=true`**).
 
-Crée les 4 utilisateurs dans **Supabase → Authentication** avec les emails par défaut (`test-*@example.com`, surchargeables via `VITE_SUPABASE_TEST_EMAIL_*` — voir `Al_Toppe_Web/src/config/supabaseQuickTest.ts`), le mot de passe **`VITE_SUPABASE_TEST_PASSWORD`** (ou défaut dans ce fichier), et **`user_metadata.role`** = `entrepreneur` | `coach` | `bailleur` | `admin`.
+Les comptes **`test-*@example.com`** peuvent être créés sur le projet Supabase via la migration `Al_Toppe_Web/supabase/migrations/20260406120000_seed_al_toppe_quick_test_auth_users.sql` (mot de passe par défaut aligné sur `supabaseQuickTest.ts`). Tu peux surcharger les emails avec `VITE_SUPABASE_TEST_EMAIL_*` côté front si besoin.
 
 Pour l’auth **Django** (téléphone + JWT), il n’y a plus de connexion rapide côté front : utilise des comptes réels ou `seed_test_users` en local depuis l’API.
 
