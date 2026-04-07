@@ -17,6 +17,8 @@ import { AdminSettings } from './components/AdminSettings';
 import { ApplicationsManagement } from './components/ApplicationsManagement';
 import { PortfolioManagement } from './components/PortfolioManagement';
 import { BusinessPlansManagement } from './components/BusinessPlansManagement';
+import { EntrepreneurProfile } from './components/EntrepreneurProfile';
+import { EntrepreneurQuickCapture } from './components/EntrepreneurQuickCapture';
 import { DemoPresentation } from './components/DemoPresentation';
 import { apiService, User } from './services/api';
 import { NetworkError } from './services/errorHandler';
@@ -49,7 +51,13 @@ export default function App() {
         if (isSupabaseAuthActive()) {
           const session = await getSupabaseSession();
           if (!cancelled && session?.user) {
-            setUser(sessionToAppUser(session));
+            const u = sessionToAppUser(session);
+            setUser(u);
+            try {
+              localStorage.setItem("altoppe_user", JSON.stringify(u));
+            } catch {
+              /* ignore quota */
+            }
           }
         } else {
           apiService.syncTokenFromStorage();
@@ -95,6 +103,11 @@ export default function App() {
   const handleLogin = (userData: User) => {
     setUser(userData);
     setShowWelcome(true);
+    try {
+      localStorage.setItem("altoppe_user", JSON.stringify(userData));
+    } catch {
+      /* ignore */
+    }
   };
 
   const handleLogout = () => {
@@ -122,7 +135,13 @@ export default function App() {
       case 'entrepreneur':
         switch (currentPage) {
           case 'dashboard': return <CoachDashboard user={user} />;
-          case 'activities': return <EntrepreneursManagement user={user} />;
+          case 'activities':
+            return (
+              <div className="relative pb-36 min-h-screen">
+                <EntrepreneurProfile user={user} />
+                <EntrepreneurQuickCapture user={user} />
+              </div>
+            );
           case 'sessions': return <SessionsManagement user={user} />;
           case 'reports': return <CoachReports user={user} />;
           default: return <CoachDashboard user={user} />;

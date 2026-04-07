@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -31,6 +31,9 @@ export function ProgramsManagement() {
   const [filterStatus, setFilterStatus] = useState('all');
   const [filterType, setFilterType] = useState('all');
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [dialogFundingType, setDialogFundingType] = useState('');
+  const [dialogSector, setDialogSector] = useState('');
+  const [dialogRegion, setDialogRegion] = useState('');
 
   // Données mockées des programmes
   const programs = [
@@ -195,7 +198,17 @@ export function ProgramsManagement() {
           <h1 className="text-2xl font-bold text-gray-900">Gestion des Programmes</h1>
           <p className="text-gray-600">Créez et gérez vos programmes de financement</p>
         </div>
-        <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <Dialog
+          open={showAddDialog}
+          onOpenChange={(open) => {
+            setShowAddDialog(open);
+            if (!open) {
+              setDialogFundingType('');
+              setDialogSector('');
+              setDialogRegion('');
+            }
+          }}
+        >
           <DialogTrigger asChild>
             <Button className="bg-[#006666] hover:bg-[#004d4d]">
               <Plus className="w-4 h-4 mr-2" />
@@ -205,6 +218,9 @@ export function ProgramsManagement() {
           <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Créer un nouveau programme de financement</DialogTitle>
+              <DialogDescription>
+                Renseignez les informations du programme (aperçu local, pas encore enregistré côté serveur).
+              </DialogDescription>
             </DialogHeader>
             <div className="grid grid-cols-2 gap-4 mt-4">
               <div className="space-y-2">
@@ -213,17 +229,18 @@ export function ProgramsManagement() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="type">Type de financement</Label>
-                <Select>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="grant">Subvention</SelectItem>
-                    <SelectItem value="loan">Prêt</SelectItem>
-                    <SelectItem value="hybrid">Hybride</SelectItem>
-                    <SelectItem value="equity">Équité</SelectItem>
-                  </SelectContent>
-                </Select>
+                <select
+                  id="type"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={dialogFundingType}
+                  onChange={(e) => setDialogFundingType(e.target.value)}
+                >
+                  <option value="">Choisir un type</option>
+                  <option value="grant">Subvention</option>
+                  <option value="loan">Prêt</option>
+                  <option value="hybrid">Hybride</option>
+                  <option value="equity">Équité</option>
+                </select>
               </div>
               <div className="col-span-2 space-y-2">
                 <Label htmlFor="description">Description</Label>
@@ -259,34 +276,36 @@ export function ProgramsManagement() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="sectors">Secteurs ciblés</Label>
-                <Select>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sélectionner secteurs" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="commerce">Commerce</SelectItem>
-                    <SelectItem value="services">Services</SelectItem>
-                    <SelectItem value="artisanat">Artisanat</SelectItem>
-                    <SelectItem value="agriculture">Agriculture</SelectItem>
-                    <SelectItem value="technologie">Technologie</SelectItem>
-                  </SelectContent>
-                </Select>
+                <select
+                  id="sectors"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={dialogSector}
+                  onChange={(e) => setDialogSector(e.target.value)}
+                >
+                  <option value="">Sélectionner un secteur</option>
+                  <option value="commerce">Commerce</option>
+                  <option value="services">Services</option>
+                  <option value="artisanat">Artisanat</option>
+                  <option value="agriculture">Agriculture</option>
+                  <option value="technologie">Technologie</option>
+                </select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="regions">Régions ciblées</Label>
-                <Select>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Sélectionner régions" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="dakar">Dakar</SelectItem>
-                    <SelectItem value="thies">Thiès</SelectItem>
-                    <SelectItem value="saint-louis">Saint-Louis</SelectItem>
-                    <SelectItem value="kaolack">Kaolack</SelectItem>
-                    <SelectItem value="fatick">Fatick</SelectItem>
-                    <SelectItem value="louga">Louga</SelectItem>
-                  </SelectContent>
-                </Select>
+                <select
+                  id="regions"
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={dialogRegion}
+                  onChange={(e) => setDialogRegion(e.target.value)}
+                >
+                  <option value="">Sélectionner une région</option>
+                  <option value="dakar">Dakar</option>
+                  <option value="thies">Thiès</option>
+                  <option value="saint-louis">Saint-Louis</option>
+                  <option value="kaolack">Kaolack</option>
+                  <option value="fatick">Fatick</option>
+                  <option value="louga">Louga</option>
+                </select>
               </div>
               <div className="col-span-2 space-y-2">
                 <Label htmlFor="criteria">Critères d'éligibilité</Label>

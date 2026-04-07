@@ -55,3 +55,30 @@ export function isSupabaseAuthActive(): boolean {
   return isSupabaseAuthEnabled();
 }
 
+/**
+ * Source des données métier (hors auth Supabase éventuelle).
+ * - `local` (défaut) : données de démo en mémoire, aucun appel réseau vers l’API Django.
+ * - `remote` : API Django à VITE_API_BASE_URL (comportement historique).
+ */
+export type DataBackendMode = "local" | "remote" | "supabase";
+
+export function getDataBackendMode(): DataBackendMode {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = String((import.meta as any).env?.VITE_DATA_BACKEND ?? "local")
+    .trim()
+    .toLowerCase();
+  if (raw === "supabase" || raw === "sb") return "supabase";
+  if (raw === "remote" || raw === "django" || raw === "api") return "remote";
+  return "local";
+}
+
+/** True si on n’utilise pas l’API Django pour les lectures/écritures métier (voir localDataBackend). */
+export function isLocalDataBackend(): boolean {
+  return getDataBackendMode() === "local";
+}
+
+/** True si les données métier transitent via Supabase (DB + functions + storage). */
+export function isSupabaseDataBackend(): boolean {
+  return getDataBackendMode() === "supabase";
+}
+

@@ -27,7 +27,6 @@ import {
   CheckCircle,
   XCircle
 } from 'lucide-react';
-import { API_BASE_URL } from '@/config';
 import type { User } from '../services/api';
 
 interface AdminDashboardProps {
@@ -137,31 +136,23 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
   
   const loadEntrepreneurs = async () => {
     try {
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const response = await fetch(`${API_BASE_URL}/entrepreneurs/`, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        const results = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
-        const formatted = results.map((ent: {
-          id?: string;
-          full_name?: string;
-          first_name?: string;
-          last_name?: string;
-          phone?: string;
-          phone_number?: string;
-        }) => ({
-          id: ent.id || '',
-          full_name: ent.full_name || `${ent.first_name || ''} ${ent.last_name || ''}`.trim() || 'Entrepreneur',
-          phone: ent.phone || ent.phone_number || ''
-        }));
-        setEntrepreneurs(formatted);
-      }
+      const data = await apiService.request<unknown>('/entrepreneurs/');
+      const results = Array.isArray((data as { results?: unknown[] })?.results)
+        ? (data as { results: unknown[] }).results
+        : (Array.isArray(data) ? data : []);
+      const formatted = results.map((ent: {
+        id?: string;
+        full_name?: string;
+        first_name?: string;
+        last_name?: string;
+        phone?: string;
+        phone_number?: string;
+      }) => ({
+        id: ent.id || '',
+        full_name: ent.full_name || `${ent.first_name || ''} ${ent.last_name || ''}`.trim() || 'Entrepreneur',
+        phone: ent.phone || ent.phone_number || ''
+      }));
+      setEntrepreneurs(formatted);
     } catch (e) {
       console.error('Erreur chargement entrepreneurs:', e);
     }
@@ -266,12 +257,10 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
               className="bg-white/10 text-white border-white/30 hover:bg-white/20 hover:text-white shadow-sm"
               onClick={async () => {
                 try {
-                  const token = localStorage.getItem('altoppe_access_token');
-                  const res = await fetch(`${API_BASE_URL}/entrepreneurs/`, {
-                    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-                  });
-                  const data = res.ok ? await res.json() : [];
-                  const rows = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
+                  const data = await apiService.request<unknown>('/entrepreneurs/');
+                  const rows = Array.isArray((data as { results?: unknown[] })?.results)
+                    ? (data as { results: unknown[] }).results
+                    : (Array.isArray(data) ? data : []);
                   const csv = ['id,full_name,phone'].concat(
                     rows.map((r: { id?: string; full_name?: string; phone?: string }) =>
                       `"${r.id || ''}","${(r.full_name || '').replace(/"/g, '""')}","${r.phone || ''}"`,

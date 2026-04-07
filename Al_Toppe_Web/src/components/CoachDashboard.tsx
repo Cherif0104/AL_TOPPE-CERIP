@@ -34,7 +34,7 @@ import {
   getSessionTypeIcon,
   formatSessionDuration
 } from '../services/api';
-import { coachService } from '../services/coach';
+import { coachService, resolveCoachId } from '../services/coach';
 import Swal from 'sweetalert2';
 
 type Session = {
@@ -71,31 +71,47 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
 
   useEffect(() => {
     const fetchData = async () => {
-      // Determine coachId from user object or localStorage
-      let coachId: string | null = user.coach?.id || null;
+      let coachId: string | null = resolveCoachId(user);
       if (!coachId && typeof window !== 'undefined') {
         const stored = localStorage.getItem('altoppe_user') || localStorage.getItem('user');
         if (stored) {
           try {
             const parsed = JSON.parse(stored as string);
-            coachId = parsed?.coach?.id || parsed?.coach_id || parsed?.coachId || coachId;
+            const pr = String(parsed?.role || '').trim().toLowerCase();
+            coachId =
+              parsed?.coach?.id ||
+              parsed?.coach_id ||
+              parsed?.coachId ||
+              ((pr === 'coach' || pr === 'formateur') && parsed?.id ? String(parsed.id) : null) ||
+              coachId;
           } catch (err) {
             console.warn('CoachDashboard: erreur parsing localStorage user', err);
           }
         }
       }
 
+      if (!coachId && user?.id) {
+        const ur = String(user.role || '').trim().toLowerCase();
+        if (ur === 'coach' || ur === 'formateur') {
+          coachId = String(user.id);
+        }
+      }
+
       try {
-        // Fetch assignments (public api) and sessions (prefer coachService when we have coachId)
-        const assignmentsPromise = apiService.getAssignments().catch(() => []);
-        const sessionsPromise = coachId ? coachService.getSessions(coachId).catch(() => []) : apiService.getSessions().catch(() => []);
+        const assignmentsPromise = coachId
+          ? coachService.getAssignments(coachId).catch(() => [])
+          : apiService.getAssignments().catch(() => []);
+        const sessionsPromise = coachId
+          ? coachService.getSessions(coachId).catch(() => [])
+          : apiService.getSessions().catch(() => []);
 
         const [assignmentsData, sessionsData] = await Promise.all([assignmentsPromise, sessionsPromise]);
 
         const coachAssignmentsRaw = Array.isArray(assignmentsData) ? (assignmentsData as unknown[]) : [];
-        const coachAssignments = coachAssignmentsRaw
-          .map(a => a as Record<string, unknown>)
-          .filter(rec => rec['coach'] === user.coach?.id || String(rec['coach']) === String(coachId));
+        const coachAssignmentsMapped = coachAssignmentsRaw.map((a) => a as Record<string, unknown>);
+        const coachAssignments = coachId
+          ? coachAssignmentsMapped.filter((rec) => String(rec["coach"]) === String(coachId))
+          : coachAssignmentsMapped.filter((rec) => rec["coach"] === user.coach?.id);
 
         const coachSessionsRaw = Array.isArray(sessionsData) ? (sessionsData as unknown[]) : [];
         const coachSessions: Session[] = coachSessionsRaw.map(s => {

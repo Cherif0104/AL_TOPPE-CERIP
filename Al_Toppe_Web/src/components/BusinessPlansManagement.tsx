@@ -40,7 +40,8 @@ import {
 } from 'lucide-react';
 import { User, apiService } from '../services/api';
 import Swal from 'sweetalert2';
-import { API_BASE_URL } from '@/config';
+import { toast } from 'sonner';
+import { isLocalDataBackend } from '@/config';
 
 interface BusinessPlan {
   id: string;
@@ -168,11 +169,11 @@ export function BusinessPlansManagement({ user }: BusinessPlansManagementProps) 
       setPlans(Array.isArray(response) ? response : response.results || []);
     } catch (error) {
       console.error('Erreur lors du chargement des plans:', error);
-      Swal.fire({
-        icon: 'error',
-        title: 'Erreur',
-        text: 'Impossible de charger les plans d\'affaires',
-      });
+      setPlans([]);
+      toast.info(
+        'API indisponible : les plans ne peuvent pas être chargés. Démarrez le backend ou vérifiez la connexion.',
+        { duration: 6000 },
+      );
     } finally {
       setLoading(false);
     }
@@ -195,44 +196,14 @@ export function BusinessPlansManagement({ user }: BusinessPlansManagementProps) 
 
   const handleDownloadPDF = async (planId: string) => {
     try {
-      const token = localStorage.getItem('altoppe_access_token');
-      const response = await fetch(`${API_BASE_URL}/business-plans/${planId}/pdf/`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-
-      if (!response.ok) {
-        // Si le PDF n'existe pas, le générer d'abord
-        await fetch(`${API_BASE_URL}/business-plans/${planId}/export/pdf/`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'application/pdf',
-          },
-        });
-
-        // Réessayer le téléchargement
-        const retryResponse = await fetch(`${API_BASE_URL}/business-plans/${planId}/pdf/`, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        if (!retryResponse.ok) throw new Error('Erreur lors de la génération du PDF');
-
-        const blob = await retryResponse.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `business_plan_${planId}.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+      if (isLocalDataBackend()) {
+        toast.info(
+          'Mode données locales : le PDF est généré côté serveur Django. Passez en VITE_DATA_BACKEND=remote avec l’API lancée pour le téléchargement.',
+          { duration: 7000 },
+        );
         return;
       }
-
-      const blob = await response.blob();
+      const blob = await apiService.downloadBusinessPlanPdf(planId);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

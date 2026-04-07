@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { coachService } from '../services/coach';
+import { coachService, resolveCoachId } from '../services/coach';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -27,6 +27,8 @@ import {
 import { EntrepreneurProfile } from './EntrepreneurProfile';
 import Swal from 'sweetalert2';
 import { formatRevenue } from '@/services/api';
+import { cn } from '@/lib/utils';
+import { isSupabaseAuthActive } from '@/config';
 
 interface EntrepreneursManagementProps {
   user?: any;
@@ -70,7 +72,7 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
   const [showSessionDialog, setShowSessionDialog] = useState(false);
   const [sessionFormData, setSessionFormData] = useState({
     assignment_id: '',
-    session_type: 'individual',
+    session_type: 'initial',
     scheduled_date: new Date().toISOString().slice(0, 16), // Format: YYYY-MM-DDTHH:mm
     duration_minutes: 60,
     agenda: ''
@@ -117,20 +119,19 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
       setFormErrors({}); // Réinitialiser toutes les erreurs au début
 
       const errors: Record<string, string> = {};
+      const supabaseCoach = isSupabaseAuthActive();
 
-      // Validations des champs requis
       const requiredFields = [
         'first_name',
         'last_name',
         'phone',
         'email',
-        'password',
-        'password_confirm',
+        ...(supabaseCoach ? [] : (['password', 'password_confirm'] as const)),
         'primary_address',
         'primary_city',
         'primary_region',
         'birth_date'
-      ];
+      ] as string[];
 
       requiredFields.forEach(field => {
         if (!formData[field]) {
@@ -159,13 +160,14 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
         errors.email = 'Format d\'email invalide';
       }
 
-      // Validation du mot de passe
-      if (!errors.password && formData.password.length < 8) {
-        errors.password = 'Le mot de passe doit contenir au moins 8 caractères';
-      }
+      if (!supabaseCoach) {
+        if (!errors.password && formData.password.length < 8) {
+          errors.password = 'Le mot de passe doit contenir au moins 8 caractères';
+        }
 
-      if (!errors.password_confirm && formData.password !== formData.password_confirm) {
-        errors.password_confirm = 'Les mots de passe ne correspondent pas';
+        if (!errors.password_confirm && formData.password !== formData.password_confirm) {
+          errors.password_confirm = 'Les mots de passe ne correspondent pas';
+        }
       }
 
       const cniTrim = formData.cni_number.trim();
@@ -177,14 +179,19 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
         }
       }
 
-      // Récupérer le coach ID depuis localStorage
       const stored = localStorage.getItem('altoppe_user') || localStorage.getItem('user');
       const parsed = stored ? JSON.parse(stored) : null;
-      const coachId = parsed?.coach?.id || parsed?.coach_id || parsed?.coachId;
+      const coachId =
+        (user ? resolveCoachId(user) : null) ||
+        parsed?.coach?.id ||
+        parsed?.coach_id ||
+        parsed?.coachId ||
+        (String(parsed?.role || '').toLowerCase() === 'coach' && parsed?.id ? String(parsed.id) : null);
 
       if (!coachId) {
         throw new Error('Coach ID non trouvé');
-      }      // Créer l'entrepreneur avec les données exactes attendues par l'API
+      }
+      // Créer l'entrepreneur avec les données exactes attendues par l'API
       // Validation du format de téléphone avec la regex exacte attendue
       if (!errors.phone) {
         // Nettoyer d'abord le numéro
@@ -566,7 +573,12 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
       if (!assignmentId) {
         const stored = localStorage.getItem('altoppe_user') || localStorage.getItem('user');
         const parsed = stored ? JSON.parse(stored) : null;
-        const coachId = parsed?.coach?.id || parsed?.coach_id || parsed?.coachId;
+        const coachId =
+          user?.coach?.id ||
+          ((user?.role || '').toLowerCase() === 'coach' ? user?.id : null) ||
+          parsed?.coach?.id ||
+          parsed?.coach_id ||
+          parsed?.coachId;
 
         const assignments = await coachService.getAssignments(coachId);
         const userAssignment = assignments.find((a: any) => a.entrepreneur === viewingEntrepreneur.id || a.entrepreneur_id === viewingEntrepreneur.id);
@@ -615,75 +627,34 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
   useEffect(() => {
     const fetchEntrepreneurs = async () => {
       try {
-        // Récupérer l'utilisateur stocké dans localStorage (clé utilisée ailleurs)
         const stored = typeof window !== 'undefined' ? (localStorage.getItem('altoppe_user') || localStorage.getItem('user')) : null;
-        let coachId: string | null = null;
+        let coachId: string | null = user ? resolveCoachId(user) : null;
 
-        if (stored) {
+        if (!coachId && stored) {
           try {
-            const parsed = JSON.parse(stored as string);
-            coachId = parsed?.coach?.id || parsed?.coach_id || parsed?.coachId || null;
+            const parsed = JSON.parse(stored as string) as Record<string, unknown>;
+            coachId =
+              (parsed?.coach as { id?: string } | undefined)?.id ||
+              (parsed?.coach_id as string) ||
+              (parsed?.coachId as string) ||
+              null;
+            if (!coachId && String(parsed?.role || '').toLowerCase() === 'coach' && parsed?.id) {
+              coachId = String(parsed.id);
+            }
           } catch (e) {
             console.warn('Impossible de parser l\'utilisateur en localStorage', e);
           }
         }
 
         if (!coachId) {
-          console.warn('Aucun coach id trouvé dans le localStorage. Annulation du fetch.');
+          console.warn('Aucun identifiant coach — liste entrepreneurs vide (connectez-vous en coach ou démarrez l’API).');
           setEntrepreneurs([]);
           setIsLoading(false);
           return;
         }
 
-        const data = await coachService.getCoachEntrepreneurs(coachId);
-        console.log('Entrepreneurs backend:', data);
-
-        // L'API peut renvoyer un objet contenant une clé 'entrepreneurs' ou un tableau directement
-        const list: unknown[] = Array.isArray(data)
-          ? (data as unknown[])
-          : (Array.isArray((data as { entrepreneurs?: unknown[] }).entrepreneurs)
-            ? ((data as { entrepreneurs?: unknown[] }).entrepreneurs as unknown[])
-            : []);
-
-        // Normaliser chaque entrepreneur pour faciliter l'affichage
-        const normalized = list.map((item) => {
-          const e = item as Record<string, unknown>;
-          const getStr = (k: string) => (typeof e[k] === 'string' ? (e[k] as string) : '');
-          const getArr = (k: string) => (Array.isArray(e[k]) ? (e[k] as unknown[]) : []);
-
-          const first_name = getStr('first_name') || getStr('prenom') || getStr('prenom_fr');
-          const last_name = getStr('last_name') || getStr('nom') || getStr('nom_fr');
-          const activities = getArr('activities');
-          const firstActivity = activities.length > 0 ? (activities[0] as Record<string, unknown>) : null;
-          const business = firstActivity ? (typeof firstActivity['title'] === 'string' ? (firstActivity['title'] as string) : '') : (getStr('business') || getStr('entreprise'));
-          const sector = firstActivity ? (typeof firstActivity['sector_display'] === 'string' ? (firstActivity['sector_display'] as string) : (typeof firstActivity['sector'] === 'string' ? (firstActivity['sector'] as string) : '')) : (getStr('secteur') || getStr('sector'));
-          const locationsArr = Array.isArray(e['locations']) ? (e['locations'] as unknown[]) : [];
-          const addressFromLocations = locationsArr.length > 0 && typeof (locationsArr[0] as Record<string, unknown>)['address'] === 'string'
-            ? ((locationsArr[0] as Record<string, unknown>)['address'] as string)
-            : '';
-          const address = getStr('address') || addressFromLocations || getStr('adresse');
-          const isActive = typeof e['is_active'] === 'boolean' ? (e['is_active'] as boolean) : undefined;
-          const status = typeof isActive === 'boolean' ? (isActive ? 'En cours' : 'Suspendu') : (getStr('status_display') || getStr('status') || 'Nouveau');
-          const progress = typeof e['progres'] === 'number' ? (e['progres'] as number) : (typeof e['progress'] === 'number' ? (e['progress'] as number) : 0);
-          const lastSession = getStr('last_session') || getStr('dernier_session') || null;
-          const revenue = getStr('total_revenue') || getStr('chiffre_affaires') || getStr('revenue') || '0 FCFA';
-
-          return {
-            id: getStr('id') || String(e['id'] || ''),
-            first_name,
-            last_name,
-            full_name: getStr('full_name') || `${first_name} ${last_name}`.trim(),
-            business,
-            sector,
-            address,
-            status,
-            progress,
-            lastSession,
-            revenue,
-            raw: e,
-          };
-        });
-
+        const normalized = await coachService.getCoachEntrepreneurs(coachId);
+        console.log('Entrepreneurs (API ou Supabase):', normalized);
         setEntrepreneurs(normalized);
       } catch (error) {
         console.error('Erreur chargement entrepreneurs:', error);
@@ -693,7 +664,7 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
       }
     };
     fetchEntrepreneurs();
-  }, []);
+  }, [user?.id, user?.role, user?.coach?.id]);
 
   useEffect(() => {
     if (initialAction === 'add') {
@@ -833,15 +804,19 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
                 <Label htmlFor="civility" className="text-sm font-medium">
                   Civilité
                 </Label>
-                <Select value={formData.civility} onValueChange={handleSelectChange('civility')}>
-                  <SelectTrigger className={`${formErrors.civility ? 'border-red-500' : ''} text-base`}>
-                    <SelectValue placeholder="Civilité" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="M">M.</SelectItem>
-                    <SelectItem value="Mme">Mme</SelectItem>
-                  </SelectContent>
-                </Select>
+                <select
+                  id="civility"
+                  value={formData.civility}
+                  onChange={(e) => handleSelectChange('civility')(e.target.value)}
+                  className={cn(
+                    'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    formErrors.civility && 'border-red-500',
+                  )}
+                  aria-invalid={!!formErrors.civility}
+                >
+                  <option value="M">M.</option>
+                  <option value="Mme">Mme</option>
+                </select>
                 {formErrors.civility && (
                   <p className="text-sm text-red-500" role="alert">{formErrors.civility}</p>
                 )}
@@ -1476,22 +1451,20 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
           <div className="space-y-4 mt-4">
             <div className="space-y-2">
               <Label htmlFor="session_type">Type de session</Label>
-              <Select
+              <select
+                id="session_type"
                 value={sessionFormData.session_type}
-                onValueChange={(v) => setSessionFormData(p => ({ ...p, session_type: v }))}
+                onChange={(e) =>
+                  setSessionFormData((p) => ({ ...p, session_type: e.target.value }))
+                }
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                <SelectItem value="initial">Initiale</SelectItem>
-                      <SelectItem value="follow_up">Suivi</SelectItem>
-                      <SelectItem value="milestone">Étape importante</SelectItem>
-                      <SelectItem value="final">Session final</SelectItem>
-                      <SelectItem value="emergency">Urgence</SelectItem> 
-                  
-                </SelectContent>
-              </Select>
+                <option value="initial">Initiale</option>
+                <option value="follow_up">Suivi</option>
+                <option value="milestone">Étape importante</option>
+                <option value="final">Session final</option>
+                <option value="emergency">Urgence</option>
+              </select>
             </div>
             <div className="space-y-2">
               <Label htmlFor="scheduled_date">Date et heure</Label>

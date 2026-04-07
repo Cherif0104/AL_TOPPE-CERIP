@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
-import { coachService } from '../services/coach';
+import { coachService, resolveCoachId } from '../services/coach';
 import Swal from 'sweetalert2';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import {
   BarChart,
   Bar,
@@ -31,6 +30,7 @@ import {
 } from 'lucide-react';
 
 import { User as UserType } from '../services/api';
+import { cn } from '@/lib/utils';
 
 interface CoachReportsProps {
   user: UserType;
@@ -171,7 +171,7 @@ export function CoachReports({ user }: CoachReportsProps) {
   const fetchData = async () => {
     try {
       setIsLoading(true);
-      const coachId = user.coach?.id || user.id;
+      const coachId = resolveCoachId(user) || user.id;
       
       // Calculer les dates selon la période sélectionnée
       const { dateFrom, dateTo } = getDateRange(selectedPeriod);
@@ -542,38 +542,48 @@ export function CoachReports({ user }: CoachReportsProps) {
         </div> */}
       </div>
 
-      {/* Filtres */}
+      {/* Filtres — <select> natif pour éviter conflits de portails Radix / mobile */}
       <Card className="p-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-4">
           <div className="flex-1 space-y-2">
-            <label className="text-sm font-medium">Type de rapport</label>
-            <Select value={reportType} onValueChange={setReportType}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="daily">Quotidien</SelectItem>
-                <SelectItem value="weekly">Hebdomadaire</SelectItem>
-                <SelectItem value="monthly">Mensuel</SelectItem>
-                <SelectItem value="quarterly">Trimestriel</SelectItem>
-                <SelectItem value="annual">Annuel</SelectItem>
-              </SelectContent>
-            </Select>
+            <label htmlFor="coach-report-type" className="text-sm font-medium">
+              Type de rapport
+            </label>
+            <select
+              id="coach-report-type"
+              value={reportType}
+              onChange={(e) => setReportType(e.target.value)}
+              className={cn(
+                'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#006666]',
+              )}
+            >
+              <option value="daily">Quotidien</option>
+              <option value="weekly">Hebdomadaire</option>
+              <option value="monthly">Mensuel</option>
+              <option value="quarterly">Trimestriel</option>
+              <option value="annual">Annuel</option>
+            </select>
           </div>
           <div className="flex-1 space-y-2">
-            <label className="text-sm font-medium">Période</label>
-            <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="last_week">Semaine dernière</SelectItem>
-                <SelectItem value="last_month">Mois dernier</SelectItem>
-                <SelectItem value="last_quarter">Trimestre dernier</SelectItem>
-                <SelectItem value="last_year">Année dernière</SelectItem>
-                <SelectItem value="custom">Période personnalisée</SelectItem>
-              </SelectContent>
-            </Select>
+            <label htmlFor="coach-report-period" className="text-sm font-medium">
+              Période
+            </label>
+            <select
+              id="coach-report-period"
+              value={selectedPeriod}
+              onChange={(e) => setSelectedPeriod(e.target.value)}
+              className={cn(
+                'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#006666]',
+              )}
+            >
+              <option value="last_week">Semaine dernière</option>
+              <option value="last_month">Mois dernier</option>
+              <option value="last_quarter">Trimestre dernier</option>
+              <option value="last_year">Année dernière</option>
+              <option value="custom">Période personnalisée</option>
+            </select>
           </div>
         </div>
       </Card>

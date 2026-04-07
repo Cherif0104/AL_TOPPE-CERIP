@@ -4,7 +4,9 @@
 // Imports pour la gestion d'erreurs et le cache
 import { ErrorHandler, NetworkError } from "./errorHandler";
 import { cacheService } from "./cacheService";
-import { API_BASE_URL } from "@/config";
+import { API_BASE_URL, isLocalDataBackend, isSupabaseDataBackend } from "@/config";
+import { localMakeRequest } from "./localDataBackend";
+import { supabaseMakeRequest } from "./supabaseGateway";
 // Types basés sur l'API AL-TOPPE
 export interface Location {
   id: string;
@@ -168,6 +170,17 @@ export interface ApiError {
   details?: any;
 }
 
+/** GET lecture : erreur réseau / serveur injoignable → liste vide plutôt que throw. */
+function isBenignCoachingReadFailure(error: unknown): boolean {
+  if (typeof TypeError !== "undefined" && error instanceof TypeError) return true;
+  if (!(error instanceof NetworkError)) return false;
+  if (error.status === 404 || error.status === 0) return true;
+  if (error.code === "NETWORK_ERROR") return true;
+  const m = String(error.message || "").toLowerCase();
+  if (m.includes("fetch") || m.includes("connexion") || m.includes("network")) return true;
+  return false;
+}
+
 class ApiService {
   private accessToken: string | null = null;
 
@@ -253,6 +266,13 @@ class ApiService {
     useCache = true,
   ): Promise<T> {
     this.syncTokenFromStorage();
+    if (isSupabaseDataBackend()) {
+      const data = await supabaseMakeRequest<T>(endpoint, options);
+      return data;
+    }
+    if (isLocalDataBackend()) {
+      return await localMakeRequest<T>(endpoint, options);
+    }
     const url = `${API_BASE_URL}${endpoint}`;
     const cacheKey = `request_${endpoint}_${JSON.stringify(options)}`;
 
@@ -483,8 +503,85 @@ class ApiService {
     return await this.makeRequest<T>(endpoint, options);
   }
 
+  async getFinanceCategories(): Promise<Array<{ id: string; name: string; type: "income" | "expense" }>> {
+    const response = await this.makeRequest<{ results?: Array<{ id: string; name: string; type: "income" | "expense" }> } | Array<{ id: string; name: string; type: "income" | "expense" }>>(
+      "/finances/categories/",
+      { method: "GET" },
+    );
+    if (Array.isArray(response)) return response;
+    return Array.isArray(response?.results) ? response.results : [];
+  }
+
+  async getCashflowEntries(
+    entrepreneurId: string,
+    params?: { start_date?: string; end_date?: string },
+  ): Promise<Record<string, unknown>[]> {
+    const q = new URLSearchParams();
+    if (params?.start_date) q.set("start_date", params.start_date);
+    if (params?.end_date) q.set("end_date", params.end_date);
+    const endpoint = `/finances/entrepreneurs/${entrepreneurId}/cashflow/${q.toString() ? `?${q.toString()}` : ""}`;
+    const response = await this.makeRequest<{ results?: Record<string, unknown>[] } | Record<string, unknown>[]>(endpoint, { method: "GET" });
+    if (Array.isArray(response)) return response;
+    return Array.isArray(response?.results) ? response.results : [];
+  }
+
+  async updateCashflowEntry(
+    entrepreneurId: string,
+    txId: string,
+    payload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return await this.makeRequest<Record<string, unknown>>(
+      `/finances/entrepreneurs/${entrepreneurId}/cashflow/${txId}/`,
+      { method: "PATCH", body: JSON.stringify(payload) },
+      false,
+    );
+  }
+
+  async getFinanceSummary(
+    entrepreneurId: string,
+    params?: { start_date?: string; end_date?: string },
+  ): Promise<Record<string, unknown>> {
+    const q = new URLSearchParams();
+    if (params?.start_date) q.set("start_date", params.start_date);
+    if (params?.end_date) q.set("end_date", params.end_date);
+    const endpoint = `/finances/entrepreneurs/${entrepreneurId}/report/summary/${q.toString() ? `?${q.toString()}` : ""}`;
+    return await this.makeRequest<Record<string, unknown>>(endpoint, { method: "GET" });
+  }
+
+  async downloadFinanceReportPdf(
+    entrepreneurId: string,
+    params?: { start_date?: string; end_date?: string },
+  ): Promise<Blob> {
+    const q = new URLSearchParams();
+    if (params?.start_date) q.set("start_date", params.start_date);
+    if (params?.end_date) q.set("end_date", params.end_date);
+    const endpoint = `/finances/entrepreneurs/${entrepreneurId}/report/export-pdf/${q.toString() ? `?${q.toString()}` : ""}`;
+    const response = await this.makeRequest<{ __blob?: Blob } | Blob>(endpoint, { method: "GET" }, false);
+    if (response instanceof Blob) return response;
+    if ((response as { __blob?: Blob })?.__blob instanceof Blob) return (response as { __blob: Blob }).__blob;
+    return new Blob([JSON.stringify(response ?? {})], { type: "application/json" });
+  }
+
+  async downloadBusinessPlanPdf(planId: string): Promise<Blob> {
+    const response = await this.makeRequest<{ __blob?: Blob } | Blob>(
+      `/business-plans/${planId}/pdf/`,
+      { method: "GET" },
+      false,
+    );
+    if (response instanceof Blob) return response;
+    if ((response as { __blob?: Blob })?.__blob instanceof Blob) return (response as { __blob: Blob }).__blob;
+    return new Blob([JSON.stringify(response ?? {})], { type: "application/json" });
+  }
+
   // Rafraîchir le token (fetch direct : évite la récursion avec makeRequest + 401)
   async refreshToken(): Promise<string> {
+    if (isLocalDataBackend() || isSupabaseDataBackend()) {
+      const t =
+        localStorage.getItem("altoppe_access_token") || "local-access-token";
+      this.accessToken = t;
+      localStorage.setItem("altoppe_access_token", t);
+      return t;
+    }
     const refresh = localStorage.getItem("altoppe_refresh_token");
     if (!refresh) {
       throw new Error("Aucun token de rafraîchissement disponible");
@@ -610,10 +707,14 @@ class ApiService {
         return cached;
       }
       // Si l'endpoint n'existe pas (404), retourner un tableau vide plutôt que de throw
-      if (error.status === 404) {
+      if ((error as NetworkError)?.status === 404) {
         console.log(
           "Endpoint /coaching/assignments/ non disponible",
         );
+        return [];
+      }
+      if (isBenignCoachingReadFailure(error)) {
+        console.warn("Assignations: API indisponible ou hors ligne, liste vide.");
         return [];
       }
       throw error;
@@ -693,10 +794,14 @@ class ApiService {
         return cached;
       }
       // Si l'endpoint n'existe pas (404), retourner un tableau vide plutôt que de throw
-      if (error.status === 404) {
+      if ((error as NetworkError)?.status === 404) {
         console.log(
           "Endpoint /coaching/sessions/ non disponible",
         );
+        return [];
+      }
+      if (isBenignCoachingReadFailure(error)) {
+        console.warn("Sessions coaching: API indisponible ou hors ligne, liste vide.");
         return [];
       }
       throw error;

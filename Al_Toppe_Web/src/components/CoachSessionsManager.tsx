@@ -31,7 +31,7 @@ import {
   formatSessionDuration,
   formatDate
 } from '../services/api';
-import { coachService } from '../services/coach';
+import { coachService, resolveCoachId } from '../services/coach';
 import { toast } from 'sonner';
 import Swal from 'sweetalert2';
 
@@ -123,9 +123,8 @@ export function CoachSessionsManager({ user, initialAction, onActionHandled }: C
 
   const loadSessions = async () => {
     try {
-      // Récupérer depuis l'API en filtrant côté serveur par coach id
-      const coachId = user.coach?.id;
-      const sessionsData = await coachService.getSessions(coachId);
+      const coachId = resolveCoachId(user);
+      const sessionsData = await coachService.getSessions(coachId ?? undefined);
       // sessionsData est normalisé par le service pour toujours être un tableau
       console.log('Sessions API:', sessionsData);
       setSessions(Array.isArray(sessionsData) ? (sessionsData as CoachingSession[]) : []);
@@ -140,9 +139,8 @@ export function CoachSessionsManager({ user, initialAction, onActionHandled }: C
 
   const loadAssignments = async () => {
     try {
-      // use coachService to include auth headers
-      const coachId = user.coach?.id;
-      const assignmentsData = await coachService.getAssignments(coachId);
+      const coachId = resolveCoachId(user);
+      const assignmentsData = await coachService.getAssignments(coachId ?? undefined);
       console.log('Assignments API:', assignmentsData);
       setAssignments(Array.isArray(assignmentsData) ? assignmentsData : []);
     } catch (error) {

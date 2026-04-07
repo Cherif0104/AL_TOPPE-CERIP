@@ -13,8 +13,7 @@ import {
   DollarSign,
   RefreshCw
 } from 'lucide-react';
-
-const API_BASE_URL = "https://api.altoppe.sn/api";
+import { apiService } from '@/services/api';
 
 interface FinancialReportProps {
   entrepreneurId: string;
@@ -79,22 +78,11 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
     
     setLoading(true);
     try {
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const url = `${API_BASE_URL}/finances/entrepreneurs/${entrepreneurId}/report/summary/?start_date=${startDate}&end_date=${endDate}`;
-      
-      const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+      const data = await apiService.getFinanceSummary(entrepreneurId, {
+        start_date: startDate,
+        end_date: endDate,
       });
-      
-      if (!response.ok) {
-        throw new Error(`Erreur ${response.status}`);
-      }
-      
-      const data = await response.json();
-      setReportData(data);
+      setReportData(data as ReportData);
     } catch (error) {
       console.error('Erreur lors du chargement du rapport:', error);
     } finally {
@@ -107,21 +95,10 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
     
     setExporting(true);
     try {
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const url = `${API_BASE_URL}/finances/entrepreneurs/${entrepreneurId}/report/export-pdf/?start_date=${startDate}&end_date=${endDate}`;
-      
-      const response = await fetch(url, {
-        headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+      const blob = await apiService.downloadFinanceReportPdf(entrepreneurId, {
+        start_date: startDate,
+        end_date: endDate,
       });
-      
-      if (!response.ok) {
-        throw new Error(`Erreur ${response.status}`);
-      }
-      
-      // Télécharger le PDF
-      const blob = await response.blob();
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;

@@ -12,7 +12,7 @@ import { Checkbox } from './ui/checkbox';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartLegend, ChartLegendContent } from './ui/chart';
 import { PieChart, Pie, Cell } from 'recharts';
 // Même base que apiService (VITE_API_BASE_URL)
-import { API_BASE_URL } from '@/config';
+import { apiService } from '@/services/api';
 import { 
   FileText, 
   Download, 
@@ -90,25 +90,10 @@ export function TransactionJournal({
       if (endDate) params.append('end_date', endDate);
       else if (period?.end_date) params.append('end_date', period.end_date);
       
-      const queryString = params.toString();
-      // Utiliser fetch directement car makeRequest est privé
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const url = `${API_BASE_URL}/finances/entrepreneurs/${selectedEntrepreneurId}/cashflow/${queryString ? `?${queryString}` : ''}`;
-      
-      const response = await fetch(url, {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+      const results = await apiService.getCashflowEntries(selectedEntrepreneurId, {
+        start_date: params.get('start_date') || undefined,
+        end_date: params.get('end_date') || undefined,
       });
-      
-      if (!response.ok) {
-        throw new Error(`Erreur ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      const results = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
       
       const formattedTransactions: Transaction[] = results.map((tx: Record<string, unknown>) => ({
         id: String(tx.id || ''),
@@ -162,25 +147,14 @@ export function TransactionJournal({
   useEffect(() => {
     const fetchCategories = async () => {
       try {
-        const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-        const response = await fetch(`${API_BASE_URL}/finances/categories/`, {
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-          }
-        });
-        
-        if (response.ok) {
-          const data = await response.json();
-          const results = Array.isArray(data?.results) ? data.results : (Array.isArray(data) ? data : []);
-          setCategories(results.map((cat: { id: string; name: string; type: string }) => ({
-            id: String(cat.id),
-            name: String(cat.name),
-            type: cat.type as 'income' | 'expense'
-          })));
-        }
-      } catch (error) {
-        console.error('Erreur lors du chargement des catégories:', error);
+        const results = await apiService.getFinanceCategories();
+        setCategories(results.map((cat: { id: string; name: string; type: string }) => ({
+          id: String(cat.id),
+          name: String(cat.name),
+          type: cat.type as 'income' | 'expense',
+        })));
+      } catch {
+        /* API hors ligne : catégories vides, saisie manuelle possible */
       }
     };
 
@@ -224,9 +198,6 @@ export function TransactionJournal({
 
     setIsSaving(true);
     try {
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const url = `${API_BASE_URL}/finances/entrepreneurs/${selectedEntrepreneurId}/cashflow/${editingTransaction.id}/`;
-      
       const payload: Record<string, unknown> = {
         title: editFormData.title || editFormData.description || '',
         description: editFormData.description || '',
@@ -238,19 +209,11 @@ export function TransactionJournal({
         invoice_number: editFormData.invoice_number || '',
         has_invoice: editFormData.has_invoice || false,
       };
-
-      const response = await fetch(url, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        throw new Error(`Erreur ${response.status}`);
-      }
+      await apiService.updateCashflowEntry(
+        selectedEntrepreneurId,
+        editingTransaction.id,
+        payload,
+      );
 
       // Rafraîchir la liste des transactions
       await fetchTransactions();
@@ -428,21 +391,10 @@ export function TransactionJournal({
 
     setExportingPDF(true);
     try {
-      const token = localStorage.getItem('altoppe_access_token') || localStorage.getItem('altoppe_token') || localStorage.getItem('token');
-      const url = `${API_BASE_URL}/finances/entrepreneurs/${selectedEntrepreneurId}/report/export-pdf/?start_date=${startDate}&end_date=${endDate}`;
-      
-      const response = await fetch(url, {
-        headers: {
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        }
+      const blob = await apiService.downloadFinanceReportPdf(selectedEntrepreneurId, {
+        start_date: startDate,
+        end_date: endDate,
       });
-      
-      if (!response.ok) {
-        throw new Error(`Erreur ${response.status}`);
-      }
-      
-      // Télécharger le PDF
-      const blob = await response.blob();
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
