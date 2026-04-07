@@ -24,12 +24,9 @@ interface EntrepreneurProfileProps {
 }
 
 export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
-  const { entrepreneur } = user;
+  const entrepreneur = user?.entrepreneur;
   const [sessions, setSessions] = useState<CoachingSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
-
-  // Chiffre d'affaires total
-  const total_revenues = entrepreneur.activities.reduce((acc: number, activity: { total_revenue: string | number }) => acc + parseFloat(String(activity.total_revenue)), 0);
 
   // Charger les sessions de l'entrepreneur
   useEffect(() => {
@@ -53,10 +50,22 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
   if (!entrepreneur) {
     return (
       <Card className="p-6">
-        <p className="text-gray-500 text-center">Profil entrepreneur non disponible</p>
+        <p className="text-gray-600 text-center text-sm leading-relaxed">
+          Profil entrepreneur non disponible pour ce compte (souvent le cas avec Supabase seul,
+          sans profil renvoyé par l’API Django). Démarre le backend sur{' '}
+          <code className="text-xs bg-slate-100 px-1 rounded">127.0.0.1:8000</code>
+          {' '}ou connecte un utilisateur déjà synchronisé.
+        </p>
       </Card>
     );
   }
+
+  const activities = entrepreneur.activities ?? [];
+  const total_revenues = activities.reduce(
+    (acc: number, activity: { total_revenue: string | number }) =>
+      acc + parseFloat(String(activity.total_revenue ?? 0)),
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -121,7 +130,9 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
               <Building className="w-4 h-4 text-gray-500" />
               <div>
                 <p className="text-sm text-gray-500">Activités</p>
-                <p className="font-medium">{entrepreneur.activities_count} activité(s)</p>
+                <p className="font-medium">
+                  {entrepreneur.activities_count ?? activities.length} activité(s)
+                </p>
               </div>
             </div>
 
@@ -145,11 +156,11 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
           <h3 className="text-lg font-semibold text-gray-900">Mes Activités</h3>
         </div>
 
-        {entrepreneur.activities.length === 0 ? (
+        {activities.length === 0 ? (
           <p className="text-gray-500 text-center py-8">Aucune activité enregistrée</p>
         ) : (
           <div className="space-y-4">
-            {entrepreneur.activities.map((activity) => (
+            {activities.map((activity) => (
               <div key={activity.id} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-center space-x-3">
@@ -299,7 +310,7 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
       </Card>
 
       {/* Localisations */}
-      {entrepreneur.locations.length > 0 && (
+      {(entrepreneur.locations ?? []).length > 0 && (
         <Card className="p-6">
           <div className="flex items-center space-x-2 mb-6">
             <MapPin className="w-5 h-5 text-[#006666]" />
@@ -307,7 +318,7 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
           </div>
 
           <div className="space-y-3">
-            {entrepreneur.locations.map((location) => (
+            {(entrepreneur.locations ?? []).map((location) => (
               <div key={location.id} 
                 className={`p-3 rounded-lg border ${location.is_primary ? 'border-[#006666] bg-[#006666]/5' : 'border-gray-200'}`}
               >
