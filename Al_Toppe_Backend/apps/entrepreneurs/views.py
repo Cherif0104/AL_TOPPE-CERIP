@@ -44,8 +44,7 @@ class EntrepreneurListView(generics.ListCreateAPIView):
         
         # Si l'utilisateur est un coach, montrer ses entrepreneurs assignés
         elif self.request.user.is_coach:
-            # TODO: Implémenter la logique d'assignation des coaches
-            return queryset
+            return _filter_assigned_entrepreneurs_for_coach(self.request.user, queryset)
         
         # Si l'utilisateur est un bailleur, montrer tous les entrepreneurs
         elif self.request.user.is_bailleur:
@@ -94,8 +93,7 @@ class EntrepreneurDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         # Si l'utilisateur est un coach, montrer ses entrepreneurs assignés
         elif self.request.user.is_coach:
-            # TODO: Implémenter la logique d'assignation des coaches
-            return queryset
+            return _filter_assigned_entrepreneurs_for_coach(self.request.user, queryset)
         
         # Si l'utilisateur est un bailleur, montrer tous les entrepreneurs
         elif self.request.user.is_bailleur:
@@ -140,8 +138,7 @@ class EntrepreneurSummaryView(generics.ListAPIView):
         
         # Si l'utilisateur est un coach, montrer ses entrepreneurs assignés
         elif self.request.user.is_coach:
-            # TODO: Implémenter la logique d'assignation des coaches
-            return queryset
+            return _filter_assigned_entrepreneurs_for_coach(self.request.user, queryset)
         
         # Si l'utilisateur est un bailleur, montrer tous les entrepreneurs
         elif self.request.user.is_bailleur:
@@ -153,6 +150,26 @@ class EntrepreneurSummaryView(generics.ListAPIView):
         
         # Par défaut, ne montrer que son propre profil
         return queryset.filter(user=self.request.user)
+
+
+def _filter_assigned_entrepreneurs_for_coach(user, queryset):
+    """
+    Limite la visibilité coach aux entrepreneurs avec assignation active.
+    """
+    from apps.coaches.models import Coach, CoachAssignment
+
+    coach = getattr(user, 'coach', None)
+    if coach is None:
+        try:
+            coach = Coach.objects.get(user=user)
+        except Coach.DoesNotExist:
+            return queryset.none()
+
+    entrepreneur_ids = CoachAssignment.objects.filter(
+        coach=coach,
+        status='active',
+    ).values_list('entrepreneur_id', flat=True)
+    return queryset.filter(id__in=entrepreneur_ids)
 
 
 class LocationListView(generics.ListCreateAPIView):

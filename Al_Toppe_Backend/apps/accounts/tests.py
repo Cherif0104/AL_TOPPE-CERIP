@@ -72,6 +72,44 @@ class UserModelTests(TestCase):
         self.assertTrue(coach.is_coach)
         self.assertFalse(coach.is_entrepreneur)
 
+    def test_create_entrepreneur_user_auto_creates_profile(self):
+        """Un user entrepreneur doit avoir un profil entrepreneur créé automatiquement."""
+        from apps.entrepreneurs.models import Entrepreneur
+
+        user = User.objects.create_user(
+            phone="221 70 123 45 72",
+            role="entrepreneur",
+            password="testpass123"
+        )
+
+        self.assertTrue(Entrepreneur.objects.filter(user=user).exists())
+
+    def test_create_coach_user_auto_creates_profile(self):
+        """Un user coach doit avoir un profil coach créé automatiquement."""
+        from apps.coaches.models import Coach
+
+        user = User.objects.create_user(
+            phone="221 70 123 45 73",
+            role="coach",
+            password="testpass123"
+        )
+
+        self.assertTrue(Coach.objects.filter(user=user).exists())
+
+    def test_role_change_creates_missing_profile(self):
+        """Un changement de rôle crée le profil manquant si nécessaire."""
+        from apps.coaches.models import Coach
+
+        user = User.objects.create_user(
+            phone="221 70 123 45 74",
+            role="entrepreneur",
+            password="testpass123"
+        )
+        user.role = "coach"
+        user.save(update_fields=["role"])
+
+        self.assertTrue(Coach.objects.filter(user=user).exists())
+
 
 class PasswordResetTests(TestCase):
     """Tests pour la réinitialisation de mot de passe"""
