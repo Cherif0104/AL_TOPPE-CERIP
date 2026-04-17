@@ -121,12 +121,13 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
       const errors: Record<string, string> = {};
       const supabaseCoach = isSupabaseAuthActive();
 
+      const requirePasswordOnCreate = !supabaseCoach && !editingEntrepreneur;
       const requiredFields = [
         'first_name',
         'last_name',
         'phone',
         'email',
-        ...(supabaseCoach ? [] : (['password', 'password_confirm'] as const)),
+        ...(requirePasswordOnCreate ? (['password', 'password_confirm'] as const) : []),
         'primary_address',
         'primary_city',
         'primary_region',
@@ -160,7 +161,7 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
         errors.email = 'Format d\'email invalide';
       }
 
-      if (!supabaseCoach) {
+      if (!supabaseCoach && !editingEntrepreneur) {
         if (!errors.password && formData.password.length < 8) {
           errors.password = 'Le mot de passe doit contenir au moins 8 caractères';
         }
@@ -248,7 +249,7 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
       console.log('Numéro formaté:', phone);
       console.log('WhatsApp formaté:', whatsapp);
 
-      const entrepreneurData = {
+      const entrepreneurData: Record<string, unknown> = {
         first_name: formData.first_name.trim(),
         last_name: formData.last_name.trim(),
         civility: formData.civility,
@@ -258,14 +259,16 @@ export function EntrepreneursManagement({ user, initialAction, onActionHandled }
         birth_date: formData.birth_date,
         phone: phone,
         email: formData.email.trim().toLowerCase(),
-        password: formData.password,
-        password_confirm: formData.password_confirm,
         primary_address: formData.primary_address.trim(),
         primary_region: formData.primary_region.trim(),
         primary_city: formData.primary_city.trim(),
         primary_lat: "0",
         primary_lng: "0"
       };
+      if (!editingEntrepreneur) {
+        entrepreneurData.password = formData.password;
+        entrepreneurData.password_confirm = formData.password_confirm;
+      }
 
       const newEntrepreneur = editingEntrepreneur
         ? await coachService.updateEntrepreneur(editingEntrepreneur.id, entrepreneurData)

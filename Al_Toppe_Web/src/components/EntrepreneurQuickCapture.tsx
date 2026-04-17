@@ -10,8 +10,12 @@ import {
 } from "./ui/dialog";
 import { Textarea } from "./ui/textarea";
 import { Badge } from "./ui/badge";
-import { Sparkles, Mic, ChevronDown, ChevronUp, Square, Keyboard } from "lucide-react";
-import { apiService, type User } from "../services/api";
+import { Sparkles, Mic, ChevronDown, ChevronUp, Square, Keyboard, ImagePlus } from "lucide-react";
+import {
+  apiService,
+  type StructuredCaptureTransaction,
+  type User,
+} from "../services/api";
 import { toast } from "sonner";
 import { syncQuickCaptureToSupabase } from "@/services/supabaseCaptures";
 
@@ -27,6 +31,8 @@ export interface QuickCaptureItem {
   audioDataUrl?: string;
 }
 
+type CaptureStatus = "parsed" | "confirmed" | "persisted" | "failed";
+
 const STORAGE_PREFIX = "altoppe_entrepreneur_captures_v1:";
 
 const KIND_LABELS: Record<QuickCaptureKind, string> = {
@@ -37,9 +43,61 @@ const KIND_LABELS: Record<QuickCaptureKind, string> = {
 };
 
 const MAX_AUDIO_STORE_BYTES = 450_000;
+const DUPLICATE_GUARD_KEY = "altoppe_capture_to_cashflow_guard_v1";
+const DUPLICATE_WINDOW_MS = 60_000;
+const FINANCE_UPDATED_EVENT = "altoppe:finance-updated";
+
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: { transcript: string };
+}
+
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | null {
+  const win = window as Window & {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return win.SpeechRecognition || win.webkitSpeechRecognition || null;
+}
 
 function storageKey(userId: string) {
   return `${STORAGE_PREFIX}${userId}`;
+}
+
+function isLikelyDuplicate(userId: string, sourceText: string, txCount: number): boolean {
+  try {
+    const key = `${DUPLICATE_GUARD_KEY}:${userId}`;
+    const raw = localStorage.getItem(key);
+    const now = Date.now();
+    const sig = `${String(sourceText).trim().toLowerCase()}::${txCount}`;
+    if (raw) {
+      const parsed = JSON.parse(raw) as { signature: string; ts: number };
+      if (parsed.signature === sig && now - Number(parsed.ts || 0) < DUPLICATE_WINDOW_MS) {
+        return true;
+      }
+    }
+    localStorage.setItem(key, JSON.stringify({ signature: sig, ts: now }));
+  } catch {
+    // no-op
+  }
+  return false;
 }
 
 function loadCaptures(userId: string): QuickCaptureItem[] {
@@ -82,17 +140,35 @@ async function blobToDataUrl(blob: Blob): Promise<string | null> {
   });
 }
 
-interface EntrepreneurQuickCaptureProps {
-  user: User;
+async function fileToBase64(file: File): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Lecture image impossible"));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
 }
 
-export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps) {
+interface EntrepreneurQuickCaptureProps {
+  user: User;
+  resolvedEntrepreneurId?: string | null;
+}
+
+export function EntrepreneurQuickCapture({
+  user,
+  resolvedEntrepreneurId = null,
+}: EntrepreneurQuickCaptureProps) {
   const userId = user.id || "";
+  const cashflowEntrepreneurId =
+    resolvedEntrepreneurId && String(resolvedEntrepreneurId).trim()
+      ? String(resolvedEntrepreneurId)
+      : userId;
   const [openText, setOpenText] = useState(false);
   const [openReview, setOpenReview] = useState(false);
   const [text, setText] = useState("");
   const [kind, setKind] = useState<Exclude<QuickCaptureKind, "voice">>("need");
   const [aiBusy, setAiBusy] = useState(false);
+  const [ocrBusy, setOcrBusy] = useState(false);
   const [aiDraft, setAiDraft] = useState("");
   const [recentOpen, setRecentOpen] = useState(false);
   const [items, setItems] = useState<QuickCaptureItem[]>([]);
@@ -107,8 +183,23 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
     mime: string;
     elapsedSec: number;
   } | null>(null);
+  const [openConfirm, setOpenConfirm] = useState(false);
+  const [confirmTransactions, setConfirmTransactions] = useState<StructuredCaptureTransaction[]>([]);
+  const [confirmWarnings, setConfirmWarnings] = useState<string[]>([]);
+  const [confirmConfidence, setConfirmConfidence] = useState<number | null>(null);
+  const [confirmSourceText, setConfirmSourceText] = useState("");
+  const [confirmKind, setConfirmKind] = useState<QuickCaptureKind>("need");
+  const [confirmDurationSec, setConfirmDurationSec] = useState<number | undefined>(undefined);
+  const [confirmAiSummary, setConfirmAiSummary] = useState("");
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [speechSupported] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return Boolean(getSpeechRecognitionCtor());
+  });
+  const [liveTranscript, setLiveTranscript] = useState("");
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -126,6 +217,7 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
       if (tickRef.current) clearInterval(tickRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (pendingVoice?.url) URL.revokeObjectURL(pendingVoice.url);
+      speechRecognitionRef.current?.stop();
     };
   }, [pendingVoice?.url]);
 
@@ -148,6 +240,7 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
   };
 
   const stopRecordingToReview = () => {
+    speechRecognitionRef.current?.stop();
     const mr = mediaRecorderRef.current;
     if (!mr || mr.state === "inactive") {
       cleanupStream();
@@ -171,7 +264,7 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
         if (prev?.url) URL.revokeObjectURL(prev.url);
         return { blob, url, mime, elapsedSec: elapsed };
       });
-      setVoiceDescription("");
+      setVoiceDescription(liveTranscript.trim());
       setOpenReview(true);
     };
     mr.stop();
@@ -187,6 +280,7 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
       return;
     }
     try {
+      setLiveTranscript("");
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
       const mime = pickMime();
@@ -202,6 +296,36 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
       };
       mr.start(200);
       mediaRecorderRef.current = mr;
+
+      const SpeechRecognitionImpl = getSpeechRecognitionCtor();
+      if (SpeechRecognitionImpl) {
+        try {
+          const recognition = new SpeechRecognitionImpl();
+          speechRecognitionRef.current = recognition;
+          recognition.lang = "fr-FR";
+          recognition.interimResults = true;
+          recognition.continuous = true;
+          recognition.onresult = (event: SpeechRecognitionEventLike) => {
+            let fullText = "";
+            for (let i = 0; i < event.results.length; i += 1) {
+              const result = event.results[i];
+              const chunk = String(result?.[0]?.transcript || "").trim();
+              if (chunk) fullText = `${fullText} ${chunk}`.trim();
+            }
+            setLiveTranscript(fullText);
+          };
+          recognition.onerror = () => {
+            // Micro enregistrement continue, on ignore seulement la transcription.
+          };
+          recognition.onend = () => {
+            speechRecognitionRef.current = null;
+          };
+          recognition.start();
+        } catch {
+          speechRecognitionRef.current = null;
+        }
+      }
+
       setIsRecording(true);
       setRecordingSec(0);
       if (tickRef.current) clearInterval(tickRef.current);
@@ -224,24 +348,35 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
     const audioDataUrl = await blobToDataUrl(pendingVoice.blob);
     const baseText =
       voiceDescription.trim() ||
+      liveTranscript.trim() ||
       `Note vocale (${formatDuration(Math.max(1, dur))})`;
-    const row: QuickCaptureItem = {
-      id: crypto.randomUUID(),
-      text: baseText,
-      kind: "voice",
-      createdAt: new Date().toISOString(),
-      durationSec: Math.max(1, dur),
-      audioDataUrl: audioDataUrl ?? undefined,
-    };
-    persist([row, ...items]);
-    if (!audioDataUrl) {
-      toast.message("Mémo pleine ou fichier trop volumineux — seule la description est gardée localement.");
+    const normalizedText = baseText.trim();
+    try {
+      const analysis = await apiService.analyzeQuickCapture(normalizedText);
+      const parsedTransactions = Array.isArray(analysis.transactions) ? analysis.transactions : [];
+      setConfirmTransactions(parsedTransactions);
+      setConfirmWarnings(Array.isArray(analysis.warnings) ? analysis.warnings : []);
+      setConfirmConfidence(
+        typeof analysis.confidence === "number" ? analysis.confidence : null,
+      );
+      setConfirmSourceText(normalizedText);
+      setConfirmKind("voice");
+      setConfirmDurationSec(Math.max(1, dur));
+      setConfirmAiSummary(String(analysis.voice_response || ""));
+      setOpenConfirm(true);
+      if (!audioDataUrl) {
+        toast.message("Audio volumineux: seule la note texte sera historisée.");
+      }
+    } catch (e) {
+      console.warn(e);
+      toast.error("Analyse IA indisponible pour cette note vocale.");
+    } finally {
+      if (pendingVoice.url) URL.revokeObjectURL(pendingVoice.url);
+      setPendingVoice(null);
+      setOpenReview(false);
+      setVoiceDescription("");
+      setLiveTranscript("");
     }
-    if (pendingVoice.url) URL.revokeObjectURL(pendingVoice.url);
-    setPendingVoice(null);
-    setOpenReview(false);
-    setVoiceDescription("");
-    toast.success("Note vocale enregistrée.");
   };
 
   const handleSaveText = () => {
@@ -250,18 +385,24 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
       toast.error("Écrivez quelques mots avant d'enregistrer.");
       return;
     }
-    const row: QuickCaptureItem = {
-      id: crypto.randomUUID(),
-      text: aiDraft ? `${trimmed}\n\n— IA : ${aiDraft}` : trimmed,
-      kind,
-      createdAt: new Date().toISOString(),
-      aiSummary: aiDraft || undefined,
-    };
-    persist([row, ...items]);
-    setText("");
-    setAiDraft("");
-    setOpenText(false);
-    toast.success("Note enregistrée.");
+    void (async () => {
+      try {
+        const analysis = await apiService.analyzeQuickCapture(trimmed);
+        const parsedTransactions = Array.isArray(analysis.transactions) ? analysis.transactions : [];
+        setConfirmTransactions(parsedTransactions);
+        setConfirmWarnings(Array.isArray(analysis.warnings) ? analysis.warnings : []);
+        setConfirmConfidence(typeof analysis.confidence === "number" ? analysis.confidence : null);
+        setConfirmSourceText(trimmed);
+        setConfirmKind(kind);
+        setConfirmDurationSec(undefined);
+        setConfirmAiSummary(String(analysis.voice_response || aiDraft || ""));
+        setOpenConfirm(true);
+        setOpenText(false);
+      } catch (e) {
+        console.warn(e);
+        toast.error("Analyse IA indisponible.");
+      }
+    })();
   };
 
   const handleAiAssist = async () => {
@@ -273,18 +414,7 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
     setAiBusy(true);
     setAiDraft("");
     try {
-      const data = (await apiService.request("/ai/text/analyze/", {
-        method: "POST",
-        body: JSON.stringify({ text: trimmed }),
-      })) as {
-        voice_response?: string;
-        intent?: string;
-        success?: boolean;
-        error?: string;
-      };
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      const data = await apiService.analyzeQuickCapture(trimmed);
       const hint = [data.intent && `Intention détectée : ${data.intent}`, data.voice_response]
         .filter(Boolean)
         .join(" — ");
@@ -297,6 +427,156 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
       });
     } finally {
       setAiBusy(false);
+    }
+  };
+
+  const handleExpenseImage = async (file?: File | null) => {
+    if (!file) return;
+    setOcrBusy(true);
+    try {
+      const imageBase64 = await fileToBase64(file);
+      const analysis = await apiService.analyzeExpenseImage({
+        image_base64: imageBase64,
+        filename: file.name,
+      });
+      const parsedTransactions = Array.isArray(analysis.transactions) ? analysis.transactions : [];
+      const extractedText = String(analysis.extracted_text || "").trim();
+      setConfirmTransactions(parsedTransactions);
+      setConfirmWarnings(Array.isArray(analysis.warnings) ? analysis.warnings : []);
+      setConfirmConfidence(typeof analysis.confidence === "number" ? analysis.confidence : null);
+      setConfirmSourceText(extractedText || `OCR image: ${file.name}`);
+      setConfirmKind("task");
+      setConfirmDurationSec(undefined);
+      setConfirmAiSummary(String(analysis.voice_response || ""));
+      setOpenText(false);
+      setOpenConfirm(true);
+      toast.success("OCR terminé. Vérifiez les transactions détectées.");
+    } catch (e) {
+      console.warn(e);
+      toast.error("OCR indisponible pour cette image.");
+    } finally {
+      setOcrBusy(false);
+    }
+  };
+
+  const updateTransaction = (
+    index: number,
+    patch: Partial<StructuredCaptureTransaction>,
+  ) => {
+    setConfirmTransactions((prev) =>
+      prev.map((tx, i) => (i === index ? { ...tx, ...patch } : tx)),
+    );
+  };
+
+  const removeTransaction = (index: number) => {
+    setConfirmTransactions((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addTransaction = () => {
+    setConfirmTransactions((prev) => [
+      ...prev,
+      {
+        type: "expense",
+        amount: 0,
+        category_name: "Dépenses diverses",
+        title: "",
+        description: "",
+        date: new Date().toISOString().slice(0, 10),
+        payment_method: "cash",
+      },
+    ]);
+  };
+
+  const confirmAndPersist = async () => {
+    if (!userId) return;
+    if (isLikelyDuplicate(userId, confirmSourceText, confirmTransactions.length)) {
+      toast.message("Capture déjà traitée récemment. Vérifiez les écritures avant de relancer.");
+      return;
+    }
+
+    setIsConfirming(true);
+    try {
+      const validTransactions = confirmTransactions
+        .map((tx) => ({
+          ...tx,
+          amount: Number(tx.amount || 0),
+        }))
+        .filter((tx) => Number.isFinite(tx.amount) && tx.amount > 0);
+
+      await syncQuickCaptureToSupabase({
+        kind: confirmKind,
+        text: confirmSourceText,
+        durationSec: confirmDurationSec,
+        status: "confirmed" as CaptureStatus,
+        aiSummary: confirmAiSummary,
+        sourceText: confirmSourceText,
+        transactionsCount: validTransactions.length,
+      });
+
+      const result = await apiService.createCashflowFromCapture({
+        entrepreneur_id: cashflowEntrepreneurId,
+        source_text: confirmSourceText,
+        transactions: validTransactions,
+      });
+
+      const entryIds = Array.isArray(result.created_entries)
+        ? result.created_entries
+            .map((r) => String((r as { id?: string }).id || ""))
+            .filter(Boolean)
+        : [];
+
+      const row: QuickCaptureItem = {
+        id: crypto.randomUUID(),
+        text: confirmSourceText,
+        kind: confirmKind,
+        createdAt: new Date().toISOString(),
+        aiSummary: confirmAiSummary || undefined,
+        durationSec: confirmDurationSec,
+      };
+      persist([row, ...items]);
+      await syncQuickCaptureToSupabase({
+        kind: confirmKind,
+        text: confirmSourceText,
+        durationSec: confirmDurationSec,
+        status: "persisted" as CaptureStatus,
+        aiSummary: confirmAiSummary,
+        sourceText: confirmSourceText,
+        transactionsCount: validTransactions.length,
+        createdEntryIds: entryIds,
+      });
+
+      setOpenConfirm(false);
+      setText("");
+      setAiDraft("");
+      setConfirmTransactions([]);
+      setConfirmWarnings([]);
+      setConfirmSourceText("");
+      toast.success(
+        `${result.created_count || 0} écriture(s) de trésorerie enregistrée(s).`,
+      );
+      window.dispatchEvent(
+        new CustomEvent(FINANCE_UPDATED_EVENT, {
+          detail: {
+            entrepreneurId: cashflowEntrepreneurId,
+            createdCount: result.created_count || 0,
+            source: "quick-capture",
+          },
+        }),
+      );
+    } catch (e) {
+      console.warn(e);
+      await syncQuickCaptureToSupabase({
+        kind: confirmKind,
+        text: confirmSourceText,
+        durationSec: confirmDurationSec,
+        status: "failed" as CaptureStatus,
+        aiSummary: confirmAiSummary,
+        sourceText: confirmSourceText,
+        transactionsCount: confirmTransactions.length,
+      });
+      toast.error("Échec d'enregistrement en trésorerie.");
+    } finally {
+      setIsConfirming(false);
     }
   };
 
@@ -410,6 +690,12 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
           {pendingVoice && (
             <div className="space-y-3">
               <audio src={pendingVoice.url} controls className="w-full rounded-md" />
+              {speechSupported && liveTranscript.trim() && (
+                <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-xs text-emerald-900">
+                  <p className="mb-1 font-medium">Transcription automatique détectée</p>
+                  <p className="whitespace-pre-wrap">{liveTranscript}</p>
+                </div>
+              )}
               <Textarea
                 placeholder="Ex. : point sur la trésorerie, relance client X…"
                 value={voiceDescription}
@@ -432,6 +718,129 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
             </Button>
             <Button type="button" className="bg-[#006666] hover:bg-[#004d4d]" onClick={handleSaveVoice}>
               Enregistrer la note
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={openConfirm} onOpenChange={setOpenConfirm}>
+        <DialogContent className="max-w-xl border-[#006666]/20 sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-[#006666]" />
+              Confirmation avant enregistrement
+            </DialogTitle>
+            <DialogDescription>
+              Vérifiez et corrigez les écritures détectées avant de les enregistrer en trésorerie.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
+              <p className="font-medium text-gray-800">Source</p>
+              <p className="mt-1 whitespace-pre-wrap text-gray-700">{confirmSourceText || "Aucune source"}</p>
+              <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
+                <span>Confiance IA: {confirmConfidence != null ? `${Math.round(confirmConfidence * 100)}%` : "N/A"}</span>
+                <span>Transactions: {confirmTransactions.length}</span>
+              </div>
+            </div>
+
+            {confirmWarnings.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                {confirmWarnings.map((w, idx) => (
+                  <p key={`${w}-${idx}`}>- {w}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+              {confirmTransactions.length === 0 ? (
+                <p className="text-sm text-gray-600">Aucune transaction détectée. Vous pouvez ajouter manuellement.</p>
+              ) : (
+                confirmTransactions.map((tx, idx) => (
+                  <div key={`tx-${idx}`} className="rounded-lg border border-gray-200 p-3">
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-6">
+                      <select
+                        className="rounded border border-gray-300 px-2 py-1 text-sm"
+                        value={tx.type}
+                        onChange={(e) => updateTransaction(idx, { type: e.target.value as "income" | "expense" })}
+                      >
+                        <option value="expense">Dépense</option>
+                        <option value="income">Recette</option>
+                      </select>
+                      <input
+                        className="rounded border border-gray-300 px-2 py-1 text-sm md:col-span-2"
+                        type="text"
+                        value={tx.category_name || ""}
+                        placeholder="Catégorie"
+                        onChange={(e) => updateTransaction(idx, { category_name: e.target.value })}
+                      />
+                      <input
+                        className="rounded border border-gray-300 px-2 py-1 text-sm"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={Number(tx.amount || 0)}
+                        onChange={(e) => updateTransaction(idx, { amount: Number(e.target.value || 0) })}
+                      />
+                      <input
+                        className="rounded border border-gray-300 px-2 py-1 text-sm md:col-span-2"
+                        type="text"
+                        value={tx.title || ""}
+                        placeholder="Titre"
+                        onChange={(e) => updateTransaction(idx, { title: e.target.value })}
+                      />
+                    </div>
+                    <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-6">
+                      <input
+                        className="rounded border border-gray-300 px-2 py-1 text-sm md:col-span-2"
+                        type="date"
+                        value={tx.date || new Date().toISOString().slice(0, 10)}
+                        onChange={(e) => updateTransaction(idx, { date: e.target.value })}
+                      />
+                      <select
+                        className="rounded border border-gray-300 px-2 py-1 text-sm md:col-span-2"
+                        value={tx.payment_method || "cash"}
+                        onChange={(e) =>
+                          updateTransaction(idx, {
+                            payment_method: e.target.value as "cash" | "orange_money" | "wave" | "virement",
+                          })
+                        }
+                      >
+                        <option value="cash">Espèces</option>
+                        <option value="orange_money">Orange Money</option>
+                        <option value="wave">Wave</option>
+                        <option value="virement">Virement</option>
+                      </select>
+                      <button
+                        type="button"
+                        className="rounded border border-red-300 px-3 py-1 text-sm text-red-700 hover:bg-red-50 md:col-span-2"
+                        onClick={() => removeTransaction(idx)}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <Button type="button" variant="outline" onClick={addTransaction}>
+              Ajouter une ligne
+            </Button>
+          </div>
+
+          <DialogFooter className="gap-2 sm:justify-end">
+            <Button type="button" variant="outline" onClick={() => setOpenConfirm(false)}>
+              Annuler
+            </Button>
+            <Button
+              type="button"
+              className="bg-[#006666] hover:bg-[#004d4d]"
+              onClick={confirmAndPersist}
+              disabled={isConfirming}
+            >
+              {isConfirming ? "Enregistrement..." : "Confirmer et enregistrer"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -471,6 +880,22 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
               className="min-h-[120px] text-base"
               autoFocus
             />
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                OCR dépense (photo facture/reçu)
+              </label>
+              <input
+                type="file"
+                accept="image/*"
+                disabled={ocrBusy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0] || null;
+                  void handleExpenseImage(f);
+                  e.currentTarget.value = "";
+                }}
+                className="block w-full rounded border border-gray-200 px-2 py-1 text-xs"
+              />
+            </div>
             {aiDraft && (
               <div className="rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-950">
                 <span className="font-medium">Aperçu IA : </span>
@@ -481,6 +906,18 @@ export function EntrepreneurQuickCapture({ user }: EntrepreneurQuickCaptureProps
 
           <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
             <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={ocrBusy}
+                onClick={() => {
+                  toast.message("Utilisez le champ image ci-dessus pour lancer l'OCR.");
+                }}
+                className="border-[#006666]/40 text-[#006666]"
+              >
+                <ImagePlus className="mr-2 h-4 w-4" />
+                {ocrBusy ? "OCR..." : "OCR image"}
+              </Button>
               <Button
                 type="button"
                 variant="outline"

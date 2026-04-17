@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -16,10 +17,38 @@ import {
   Clock,
   Target,
   PieChart,
-  BarChart3
+  BarChart3,
+  AlertTriangle
 } from 'lucide-react';
+import { apiService } from '@/services/api';
+import { exportRowsAsExcel, exportTextAsSimplePdf } from '@/services/exportService';
+import { logExportAudit } from '@/services/exportAudit';
 
 export function BailleurDashboard() {
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [remotePrograms, setRemotePrograms] = useState<Array<Record<string, unknown>>>([]);
+  const [remoteApplications, setRemoteApplications] = useState<Array<Record<string, unknown>>>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const plansRaw = await apiService.request<unknown>('/business-plans/');
+        const plans = Array.isArray(plansRaw) ? plansRaw as Array<Record<string, unknown>> : [];
+        setRemotePrograms(plans);
+        setRemoteApplications(plans);
+      } catch (e) {
+        console.error(e);
+        setLoadError("Connexion Supabase indisponible : fallback local actif.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    void load();
+  }, []);
+
   // Données mockées
   const stats = {
     totalPrograms: 12,
@@ -110,6 +139,105 @@ export function BailleurDashboard() {
     }
   ];
 
+  const displayPrograms = remotePrograms.length
+    ? remotePrograms.slice(0, 6).map((p, idx) => ({
+        id: idx + 1,
+        name: String(p.title || 'Programme'),
+        type: String(p.financing_type || 'Grant'),
+        budget: `${Math.round(Number((p.financial_projections as Record<string, unknown> | undefined)?.total_budget || 0) / 1_000_000) || 5}M FCFA`,
+        distributed: `${Math.round(Number((p.financial_projections as Record<string, unknown> | undefined)?.distributed_amount || 0) / 1_000_000) || 2}M FCFA`,
+        applications: Number(p.applications_count || 0),
+        approved: Number(p.approved_count || 0),
+        status: String(p.status || 'active'),
+        deadline: String(p.updated_at || new Date().toISOString()).slice(0, 10),
+      }))
+    : programs;
+
+  const displayApplications = remoteApplications.length
+    ? remoteApplications.slice(0, 8).map((p, idx) => ({
+        id: idx + 1,
+        entrepreneur: String(p.entrepreneur_name || 'Entrepreneur'),
+        business: String(p.activity_title || p.sector_display || 'Activité'),
+        program: String(p.title || 'Programme'),
+        amount: `${Math.round(Number((p.financial_projections as Record<string, unknown> | undefined)?.requested_amount || 0) / 1_000_000) || 1}M FCFA`,
+        status: String(p.status || 'pending'),
+        submitted: String(p.created_at || new Date().toISOString()).slice(0, 10),
+        score: Number(p.score || 75),
+      }))
+    : recentApplications;
+
+  const prioritizedRiskCases = displayApplications
+    .map((app) => {
+      let riskScore = 0;
+      const notes: string[] = [];
+      const status = String(app.status || '').toLowerCase();
+      const score = Number(app.score || 0);
+      if (status === 'rejected') {
+        riskScore += 55;
+        notes.push('Dossier rejeté');
+      }
+      if (status === 'pending' || status === 'under_review') {
+        riskScore += 15;
+        notes.push('En attente prolongée');
+      }
+      if (score < 70) {
+        riskScore += 30;
+        notes.push('Score faible');
+      }
+      return { ...app, riskScore: Math.min(100, riskScore), notes };
+    })
+    .filter((item) => item.riskScore >= 30)
+    .sort((a, b) => b.riskScore - a.riskScore)
+    .slice(0, 4);
+
+  const prioritizedHighPotential = displayApplications
+    .filter((app) => {
+      const status = String(app.status || '').toLowerCase();
+      const score = Number(app.score || 0);
+      return score >= 85 && (status === 'pending' || status === 'under_review' || status === 'approved');
+    })
+    .slice(0, 4);
+
+  const exportPrioritizationReport = () => {
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const rows = [
+      ...prioritizedRiskCases.map((item) => ({
+        categorie: 'Risque',
+        entrepreneur: String(item.entrepreneur || ''),
+        programme: String(item.program || ''),
+        score: String(item.riskScore || 0),
+        statut: String(item.status || ''),
+        notes: Array.isArray(item.notes) ? item.notes.join(' | ') : '',
+      })),
+      ...prioritizedHighPotential.map((item) => ({
+        categorie: 'Haut potentiel',
+        entrepreneur: String(item.entrepreneur || ''),
+        programme: String(item.program || ''),
+        score: String(item.score || 0),
+        statut: String(item.status || ''),
+        notes: String(item.business || ''),
+      })),
+    ];
+
+    if (!rows.length) return;
+
+    exportRowsAsExcel(`bailleur-priorisation-${dateTag}.xls`, rows);
+    exportTextAsSimplePdf(
+      `bailleur-priorisation-${dateTag}.pdf`,
+      'Rapport bailleur - risques et potentiels',
+      rows.map((r) => `${r.categorie} | ${r.entrepreneur} | score ${r.score} | ${r.statut} | ${r.notes}`),
+    );
+    void logExportAudit({
+      scope: 'bailleur_risk_potential',
+      format: 'xls,pdf',
+      item_count: rows.length,
+      metadata: {
+        riskCount: prioritizedRiskCases.length,
+        potentialCount: prioritizedHighPotential.length,
+      },
+    });
+  };
+
   const sectors = [
     { name: 'Commerce', applications: 45, funded: 28, success_rate: 62 },
     { name: 'Technologie', applications: 23, funded: 18, success_rate: 78 },
@@ -155,6 +283,8 @@ export function BailleurDashboard() {
 
   return (
     <div className="space-y-6">
+      {isLoading && <Card className="p-3 text-sm text-gray-600">Chargement des données bailleur...</Card>}
+      {loadError && <Card className="p-3 text-sm text-amber-700">{loadError}</Card>}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -162,6 +292,10 @@ export function BailleurDashboard() {
           <p className="text-gray-600">Gestion des programmes de financement</p>
         </div>
         <div className="flex space-x-3">
+          <Button variant="outline" onClick={exportPrioritizationReport}>
+            <FileText className="w-4 h-4 mr-2" />
+            Export risques/potentiels
+          </Button>
           <Button variant="outline">
             <BarChart3 className="w-4 h-4 mr-2" />
             Rapport d'impact
@@ -209,6 +343,55 @@ export function BailleurDashboard() {
         />
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-5 border-red-200 bg-red-50/60">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-700" />
+              <h3 className="font-semibold text-red-900">Cas à risque priorisés</h3>
+            </div>
+            <Badge className="bg-red-100 text-red-800">{prioritizedRiskCases.length}</Badge>
+          </div>
+          {prioritizedRiskCases.length === 0 ? (
+            <p className="text-sm text-red-800">Aucun cas critique détecté pour le moment.</p>
+          ) : (
+            <div className="space-y-2">
+              {prioritizedRiskCases.map((item) => (
+                <div key={`${item.id}-risk`} className="rounded-lg border border-red-200 bg-white p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-gray-900">{item.entrepreneur}</p>
+                    <span className="text-xs font-medium text-red-700">Risque {item.riskScore}%</span>
+                  </div>
+                  <p className="text-xs text-red-700">{item.notes.join(' • ')}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-5 border-green-200 bg-green-50/60">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="font-semibold text-green-900">Entrepreneurs haut potentiel</h3>
+            <Badge className="bg-green-100 text-green-800">{prioritizedHighPotential.length}</Badge>
+          </div>
+          {prioritizedHighPotential.length === 0 ? (
+            <p className="text-sm text-green-800">Aucun profil haut potentiel détecté.</p>
+          ) : (
+            <div className="space-y-2">
+              {prioritizedHighPotential.map((item) => (
+                <div key={`${item.id}-potential`} className="rounded-lg border border-green-200 bg-white p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <p className="text-sm font-semibold text-gray-900">{item.entrepreneur}</p>
+                    <span className="text-xs font-medium text-green-700">Score {item.score}/100</span>
+                  </div>
+                  <p className="text-xs text-green-700">{item.business}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Programmes actifs */}
         <Card className="lg:col-span-2 p-6">
@@ -217,7 +400,7 @@ export function BailleurDashboard() {
             <Button variant="outline" size="sm">Gérer tous</Button>
           </div>
           <div className="space-y-4">
-            {programs.map((program) => (
+            {displayPrograms.map((program) => (
               <div key={program.id} className="border border-gray-200 rounded-lg p-4">
                 <div className="flex items-center justify-between mb-3">
                   <div>
@@ -318,7 +501,7 @@ export function BailleurDashboard() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {recentApplications.map((application) => (
+            {displayApplications.map((application) => (
               <TableRow key={application.id}>
                 <TableCell className="font-medium">{application.entrepreneur}</TableCell>
                 <TableCell>{application.business}</TableCell>

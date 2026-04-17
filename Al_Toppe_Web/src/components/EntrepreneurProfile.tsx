@@ -19,10 +19,19 @@ import {
 import { User as UserType, formatRevenue, formatDate, getActivityStatusColor, getSectorIcon, CoachingSession, getSessionStatusColor, getSessionTypeIcon, formatSessionDuration } from '../services/api';
 import { coachService } from '../services/coach';
 import { isSupabaseAuthActive } from '@/config';
-import { ensureEntrepreneurRecordIdForCurrentUser } from '@/services/supabaseCoaching';
+import {
+  acknowledgeCorrectiveActionByEntrepreneur,
+  listCorrectiveActionsForEntrepreneur,
+  type CorrectiveAction,
+} from '@/services/coachCorrectiveActions';
 
 interface EntrepreneurProfileProps {
   user: UserType;
+  showIdentity?: boolean;
+  showActivities?: boolean;
+  showSessions?: boolean;
+  showLocations?: boolean;
+  resolvedEntrepreneurId?: string | null;
 }
 
 function normalizeCivility(value: unknown): { civility: 'M' | 'Mme' | 'Mlle'; civilityDisplay: string } {
@@ -97,46 +106,48 @@ function normalizeActivities(rawActivities: unknown, fallback: { entrepreneurId:
   });
 }
 
-export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
+export function EntrepreneurProfile({
+  user,
+  showIdentity = true,
+  showActivities = true,
+  showSessions = true,
+  showLocations = true,
+  resolvedEntrepreneurId = null,
+}: EntrepreneurProfileProps) {
   const entrepreneur = user?.entrepreneur;
   const [supabaseEntrepreneur, setSupabaseEntrepreneur] = useState<UserType['entrepreneur'] | null>(null);
   const [sessions, setSessions] = useState<CoachingSession[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [coachActions, setCoachActions] = useState<CorrectiveAction[]>([]);
   const [linkedSupabaseEntrepreneurId, setLinkedSupabaseEntrepreneurId] = useState<string | null>(null);
   const [supabaseLinkResolved, setSupabaseLinkResolved] = useState(() => !isSupabaseAuthActive());
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
-    if (entrepreneur?.id) {
+    // La resolution de liaison est centralisee dans App.tsx pour eviter
+    // les appels concurrents et les boucles de requetes Supabase.
+    if (resolvedEntrepreneurId) {
+      setLinkedSupabaseEntrepreneurId(String(resolvedEntrepreneurId));
+    } else {
       setLinkedSupabaseEntrepreneurId(null);
-      setSupabaseLinkResolved(true);
-      return;
     }
-    if (!isSupabaseAuthActive()) {
-      setLinkedSupabaseEntrepreneurId(null);
-      setSupabaseLinkResolved(true);
-      return;
-    }
-    let cancelled = false;
-    setSupabaseLinkResolved(false);
-    void ensureEntrepreneurRecordIdForCurrentUser()
-      .then((id) => {
-        if (!cancelled) {
-          setLinkedSupabaseEntrepreneurId(id);
-          setSupabaseLinkResolved(true);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setLinkedSupabaseEntrepreneurId(null);
-          setSupabaseLinkResolved(true);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [entrepreneur?.id, user?.id]);
+    setSupabaseLinkResolved(true);
+  }, [entrepreneur?.id, user?.id, resolvedEntrepreneurId]);
 
   const sessionsForEntrepreneurId = entrepreneur?.id ?? linkedSupabaseEntrepreneurId ?? null;
+
+  useEffect(() => {
+    const refresh = () => setRefreshTick((v) => v + 1);
+    const onFocus = () => refresh();
+    const interval = window.setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 60_000);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,7 +209,7 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
     return () => {
       cancelled = true;
     };
-  }, [entrepreneur, sessionsForEntrepreneurId, user.id]);
+  }, [entrepreneur, sessionsForEntrepreneurId, user.id, refreshTick]);
 
   useEffect(() => {
     const loadSessions = async () => {
@@ -215,7 +226,23 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
       }
     };
     void loadSessions();
-  }, [sessionsForEntrepreneurId]);
+  }, [sessionsForEntrepreneurId, refreshTick]);
+
+  const effectiveEntrepreneur = entrepreneur ?? supabaseEntrepreneur;
+
+  useEffect(() => {
+    const refresh = () => {
+      const actions = listCorrectiveActionsForEntrepreneur({
+        entrepreneur_id: sessionsForEntrepreneurId,
+        entrepreneur_name: effectiveEntrepreneur?.full_name || null,
+      });
+      setCoachActions(actions);
+    };
+    refresh();
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [sessionsForEntrepreneurId, effectiveEntrepreneur?.full_name, refreshTick]);
 
   if (!supabaseLinkResolved) {
     return (
@@ -225,14 +252,24 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
     );
   }
 
-  const effectiveEntrepreneur = entrepreneur ?? supabaseEntrepreneur;
+  const acknowledgeCoachAction = (actionId: string) => {
+    acknowledgeCorrectiveActionByEntrepreneur({
+      id: actionId,
+      entrepreneur_id: sessionsForEntrepreneurId || user.id || null,
+    });
+    const actions = listCorrectiveActionsForEntrepreneur({
+      entrepreneur_id: sessionsForEntrepreneurId,
+      entrepreneur_name: effectiveEntrepreneur?.full_name || null,
+    });
+    setCoachActions(actions);
+  };
 
   if (!effectiveEntrepreneur && !sessionsForEntrepreneurId) {
     return (
       <Card className="p-6">
         <div className="text-gray-600 text-center text-sm leading-relaxed">
-          Profil entrepreneur non disponible pour ce compte.
-          Votre coach peut creer votre dossier puis renseigner la colonne entrepreneur_user_id avec votre identifiant Auth pour lier le compte.
+          Profil entrepreneur en cours d'initialisation.
+          Vous pouvez deja utiliser vos modules; les informations de profil se complètent automatiquement.
         </div>
       </Card>
     );
@@ -246,10 +283,11 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
   );
 
   return (
-    <div className="space-y-6" key={sessionsForEntrepreneurId ?? 'no-entrepreneur'}>
+    <div className="space-y-6">
       {effectiveEntrepreneur && (
       <>
       {/* Informations personnelles */}
+      {showIdentity && (
       <Card className="p-6">
         <div className="flex items-start justify-between mb-6">
           <div className="flex items-center space-x-4">
@@ -330,8 +368,10 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
           </div>
         </div>
       </Card>
+      )}
 
       {/* Activités */}
+      {showActivities && (
       <Card className="p-6">
         <div className="flex items-center space-x-2 mb-6">
           <Building className="w-5 h-5 text-[#006666]" />
@@ -389,7 +429,20 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
           </div>
         )}
       </Card>
+      )}
       </>
+      )}
+
+      {!effectiveEntrepreneur && showActivities && (
+        <Card className="p-6">
+          <div className="flex items-center space-x-2 mb-3">
+            <Building className="w-5 h-5 text-[#006666]" />
+            <h3 className="text-lg font-semibold text-gray-900">Mes Activités</h3>
+          </div>
+          <p className="text-gray-600 text-sm">
+            Aucune activité enregistrée pour le moment. Vous pouvez commencer avec la saisie rapide.
+          </p>
+        </Card>
       )}
 
       {!effectiveEntrepreneur && sessionsForEntrepreneurId && (
@@ -401,7 +454,68 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
         </Card>
       )}
 
+      {effectiveEntrepreneur && (
+        <Card className="p-6 border-[#006666]/20 bg-[#006666]/5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <Clock className="w-5 h-5 text-[#006666]" />
+              <h3 className="text-lg font-semibold text-gray-900">Actions de suivi du coach</h3>
+            </div>
+            <Badge className="bg-[#006666] text-white">{coachActions.length}</Badge>
+          </div>
+          {coachActions.length === 0 ? (
+            <p className="text-sm text-gray-600">
+              Aucune action corrective en attente. Continuez vos saisies pour un suivi régulier.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {coachActions.slice(0, 6).map((action) => (
+                <div key={action.id} className="rounded-lg border border-[#006666]/20 bg-white p-3">
+                  <div className="mb-1 flex items-center justify-between">
+                    <p className="text-sm font-medium text-gray-900">{action.action}</p>
+                    <div className="flex items-center gap-2">
+                      {action.entrepreneur_acknowledged_at && (
+                        <Badge className="bg-emerald-100 text-emerald-800">Vu / Compris</Badge>
+                      )}
+                      <Badge
+                        className={
+                          action.status === 'done'
+                            ? 'bg-green-100 text-green-800'
+                            : action.status === 'in_progress'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-amber-100 text-amber-800'
+                        }
+                      >
+                        {action.status === 'done' ? 'Terminé' : action.status === 'in_progress' ? 'En cours' : 'À faire'}
+                      </Badge>
+                    </div>
+                  </div>
+                  {action.risk_notes.length > 0 && (
+                    <p className="text-xs text-gray-600">{action.risk_notes.join(' • ')}</p>
+                  )}
+                  <p className="text-xs text-gray-500 mt-1">
+                    Ajouté le {new Date(action.created_at).toLocaleString('fr-FR')}
+                  </p>
+                  {!action.entrepreneur_acknowledged_at && (
+                    <div className="mt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => acknowledgeCoachAction(action.id)}
+                        className="rounded-md bg-[#006666] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#004d4d]"
+                      >
+                        Marquer Vu / Compris
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* Sessions de coaching */}
+      {showSessions && (
       <Card className="p-6">
         <div className="flex items-center space-x-2 mb-6">
           <MessageSquare className="w-5 h-5 text-[#006666]" />
@@ -503,9 +617,10 @@ export function EntrepreneurProfile({ user }: EntrepreneurProfileProps) {
           </div>
         )}
       </Card>
+      )}
 
       {/* Localisations */}
-      {effectiveEntrepreneur && (effectiveEntrepreneur.locations ?? []).length > 0 && (
+      {showLocations && effectiveEntrepreneur && (effectiveEntrepreneur.locations ?? []).length > 0 && (
         <Card className="p-6">
           <div className="flex items-center space-x-2 mb-6">
             <MapPin className="w-5 h-5 text-[#006666]" />

@@ -22,7 +22,8 @@ import {
   Star,
   Award,
   Play,
-  User as UserIcon
+  User as UserIcon,
+  AlertTriangle
 } from 'lucide-react';
 import {
   User,
@@ -36,6 +37,12 @@ import {
 } from '../services/api';
 import { coachService, resolveCoachId } from '../services/coach';
 import Swal from 'sweetalert2';
+import {
+  createCorrectiveAction,
+  listCorrectiveActionsByCoach,
+  updateCorrectiveActionStatus,
+  type CorrectiveAction,
+} from '@/services/coachCorrectiveActions';
 
 type Session = {
   id: string | number;
@@ -68,6 +75,7 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
   const [profileSkills, setProfileSkills] = useState('');
   const [profileSpec, setProfileSpec] = useState('');
   const [profileSaving, setProfileSaving] = useState(false);
+  const [correctiveActions, setCorrectiveActions] = useState<CorrectiveAction[]>([]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -213,7 +221,7 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
   };
 
   const saveCoachProfile = async () => {
-    const coachId = user.coach?.id;
+    const coachId = resolveCoachId(user);
     if (!coachId) {
       Swal.fire({ icon: 'warning', title: 'Profil coach', text: 'Profil coach introuvable.' });
       return;
@@ -322,6 +330,73 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
         raw: ar,
       } as { id: string; full_name: string; business: string; status: string; raw: Record<string, unknown> };
     });
+
+  const riskCases = displayEntrepreneurs
+    .map((e) => {
+      const relatedSessions = sessions.filter((s) => {
+        const sid = String((s as Session & { entrepreneur_id?: string }).entrepreneur_id || s.entrepreneur || '');
+        return sid === String(e.id) || String(s.entrepreneur_name || '').trim() === String(e.full_name).trim();
+      });
+      const latestSessionTs = relatedSessions
+        .map((s) => {
+          const dt = s.scheduled_date || (s as Session & { created_at?: string }).created_at;
+          return dt ? new Date(String(dt)).getTime() : 0;
+        })
+        .filter((ts) => Number.isFinite(ts) && ts > 0)
+        .sort((a, b) => b - a)[0] || 0;
+      const daysSinceLastSession = latestSessionTs
+        ? Math.floor((Date.now() - latestSessionTs) / 86_400_000)
+        : 999;
+      const hasUpcoming = upcomingSessions.some((s) => {
+        const sid = String((s as Session & { entrepreneur_id?: string }).entrepreneur_id || s.entrepreneur || '');
+        return sid === String(e.id) || String(s.entrepreneur_name || '').trim() === String(e.full_name).trim();
+      });
+
+      let riskScore = 0;
+      const notes: string[] = [];
+      const status = String(e.status || '').toLowerCase();
+      if (status.includes('suspend') || status.includes('cancel')) {
+        riskScore += 45;
+        notes.push('Statut fragile');
+      }
+      if (!hasUpcoming) {
+        riskScore += 20;
+        notes.push('Aucune session planifiée');
+      }
+      if (daysSinceLastSession > 21) {
+        riskScore += 25;
+        notes.push(`Dernier suivi il y a ${daysSinceLastSession}j`);
+      }
+      if ((e.business || '').trim().length === 0) {
+        riskScore += 10;
+        notes.push('Activité non renseignée');
+      }
+
+      return {
+        id: e.id,
+        entrepreneur: e.full_name || 'Entrepreneur',
+        riskScore: Math.min(100, riskScore),
+        notes,
+      };
+    })
+    .filter((c) => c.riskScore >= 30)
+    .sort((a, b) => b.riskScore - a.riskScore)
+    .slice(0, 5);
+
+  const coachActorId = String(resolveCoachId(user) || user.id || '');
+  const refreshCorrectiveActions = () => {
+    if (!coachActorId) return;
+    setCorrectiveActions(listCorrectiveActionsByCoach(coachActorId));
+  };
+  const pendingCorrectiveActions = correctiveActions.filter((a) => a.status !== 'done').slice(0, 5);
+
+  useEffect(() => {
+    refreshCorrectiveActions();
+    const onFocus = () => refreshCorrectiveActions();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coachActorId]);
 
   const getEntrepreneurName = (session: Session) => {
     if (session.entrepreneur_name && !/^\d+$/.test(session.entrepreneur_name)) {
@@ -439,6 +514,58 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
     }
   };
 
+  const handleCreateCorrectiveAction = async (risk: { id: string; entrepreneur: string; notes: string[]; riskScore?: number }) => {
+    const defaultAction = `Planifier un suivi ciblé avec ${risk.entrepreneur}. Focus: ${risk.notes.join(', ')}.`;
+    const result = await Swal.fire({
+      title: 'Créer action corrective',
+      input: 'textarea',
+      inputValue: defaultAction,
+      inputLabel: `Action pour ${risk.entrepreneur}`,
+      inputPlaceholder: 'Décrivez l’action corrective...',
+      showCancelButton: true,
+      confirmButtonText: 'Enregistrer',
+      cancelButtonText: 'Annuler',
+      confirmButtonColor: '#006666',
+      inputValidator: (value) => {
+        if (!String(value || '').trim()) {
+          return 'Veuillez renseigner une action corrective.';
+        }
+        return undefined;
+      },
+    });
+    if (!result.isConfirmed) return;
+    try {
+      createCorrectiveAction({
+        coach_id: coachActorId,
+        entrepreneur_id: risk.id,
+        entrepreneur_name: risk.entrepreneur,
+        risk_score: risk.riskScore || 0,
+        risk_notes: risk.notes,
+        action: String(result.value || '').trim(),
+      });
+      refreshCorrectiveActions();
+      Swal.fire({
+        icon: 'success',
+        title: 'Action corrective enregistrée',
+        timer: 1600,
+        showConfirmButton: false,
+      });
+    } catch (e) {
+      console.error(e);
+      Swal.fire({
+        icon: 'error',
+        title: 'Erreur',
+        text: "Impossible d'enregistrer l'action corrective.",
+        confirmButtonColor: '#006666',
+      });
+    }
+  };
+
+  const handleMarkCorrectiveDone = (id: string) => {
+    updateCorrectiveActionStatus(id, 'done');
+    refreshCorrectiveActions();
+  };
+
   // Si c'est un entrepreneur, afficher son profil
   if ((user.role || '').toLowerCase() === 'entrepreneur') {
     return (
@@ -456,7 +583,10 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
           </div>
         </div>
         <EntrepreneurProfile user={user} />
-        <EntrepreneurQuickCapture user={user} />
+        <EntrepreneurQuickCapture
+          user={user}
+          resolvedEntrepreneurId={user?.entrepreneur?.id ? String(user.entrepreneur.id) : null}
+        />
       </div>
     );
   }
@@ -612,6 +742,70 @@ export function CoachDashboard({ user, onPageChange }: CoachDashboardProps) {
           </div>
         </div>
       </div>
+
+      {riskCases.length > 0 && (
+        <Card className="mb-8 p-5 border-red-200 bg-red-50/60 rounded-2xl">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-red-700" />
+              <h3 className="text-base font-bold text-red-900">Cas à risque priorisés</h3>
+            </div>
+            <Badge className="bg-red-100 text-red-800">{riskCases.length} priorités</Badge>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {riskCases.map((risk) => (
+              <div key={risk.id} className="rounded-xl border border-red-200 bg-white p-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-900">{risk.entrepreneur}</p>
+                  <Badge className="bg-red-100 text-red-800">Risque {risk.riskScore}%</Badge>
+                </div>
+                <p className="text-xs text-red-700">{risk.notes.join(' • ')}</p>
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    size="sm"
+                    className="bg-[#006666] hover:bg-[#004d4d] text-white"
+                    onClick={() => void handleCreateCorrectiveAction(risk)}
+                  >
+                    Action corrective
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {pendingCorrectiveActions.length > 0 && (
+        <Card className="mb-8 p-5 border-blue-200 bg-blue-50/60 rounded-2xl">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-base font-bold text-blue-900">Actions correctives en cours</h3>
+            <Badge className="bg-blue-100 text-blue-800">{pendingCorrectiveActions.length}</Badge>
+          </div>
+          <div className="space-y-2">
+            {pendingCorrectiveActions.map((row) => (
+              <div key={row.id} className="rounded-xl border border-blue-200 bg-white p-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-900">{row.entrepreneur_name}</p>
+                  <div className="flex items-center gap-2">
+                    {row.entrepreneur_acknowledged_at && (
+                      <Badge className="bg-emerald-100 text-emerald-800">Vu / Compris</Badge>
+                    )}
+                    <Badge className="bg-amber-100 text-amber-800">
+                      {row.status === 'in_progress' ? 'En cours' : 'À faire'}
+                    </Badge>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-700">{row.action}</p>
+                <div className="mt-2 flex justify-end">
+                  <Button size="sm" variant="outline" onClick={() => handleMarkCorrectiveDone(row.id)}>
+                    Marquer terminé
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8">
         {/* Entrepreneurs récents */}

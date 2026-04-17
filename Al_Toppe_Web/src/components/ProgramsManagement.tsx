@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -25,6 +25,7 @@ import {
   CheckCircle,
   Clock
 } from 'lucide-react';
+import { apiService } from '@/services/api';
 
 export function ProgramsManagement() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,6 +35,27 @@ export function ProgramsManagement() {
   const [dialogFundingType, setDialogFundingType] = useState('');
   const [dialogSector, setDialogSector] = useState('');
   const [dialogRegion, setDialogRegion] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [remotePrograms, setRemotePrograms] = useState<Array<Record<string, unknown>>>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const raw = await apiService.request<unknown>('/business-plans/');
+        const plans = Array.isArray(raw) ? raw as Array<Record<string, unknown>> : [];
+        setRemotePrograms(plans);
+      } catch (e) {
+        console.error(e);
+        setLoadError("Lecture Supabase indisponible, fallback local.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    void load();
+  }, []);
 
   // Données mockées des programmes
   const programs = [
@@ -172,7 +194,32 @@ export function ProgramsManagement() {
     }).format(amount).replace('XOF', 'FCFA');
   };
 
-  const filteredPrograms = programs.filter(program => {
+  const sourcePrograms = remotePrograms.length
+    ? remotePrograms.map((p, idx) => ({
+        id: idx + 1,
+        name: String(p.title || 'Programme'),
+        description: String(p.summary || 'Programme de financement'),
+        type: String(p.financing_type || 'Grant'),
+        total_budget: Number((p.financial_projections as Record<string, unknown> | undefined)?.total_budget || 0),
+        distributed_amount: Number((p.financial_projections as Record<string, unknown> | undefined)?.distributed_amount || 0),
+        min_amount: 0,
+        max_amount: Number((p.financial_projections as Record<string, unknown> | undefined)?.requested_amount || 0),
+        status: String(p.status || 'active'),
+        start_date: String(p.created_at || '').slice(0, 10),
+        end_date: String(p.updated_at || '').slice(0, 10),
+        application_deadline: String(p.updated_at || '').slice(0, 10),
+        target_sectors: [String(p.sector_display || 'General')],
+        target_regions: ['Sénégal'],
+        applications_count: Number(p.applications_count || 0),
+        approved_count: Number(p.approved_count || 0),
+        rejected_count: Number(p.rejected_count || 0),
+        pending_count: Number(p.pending_count || 0),
+        success_rate: Number(p.success_rate || 0),
+        created_at: String(p.created_at || '').slice(0, 10),
+      }))
+    : programs;
+
+  const filteredPrograms = sourcePrograms.filter(program => {
     const matchesSearch = program.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          program.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || program.status === filterStatus;
@@ -182,16 +229,18 @@ export function ProgramsManagement() {
   });
 
   const stats = {
-    total: programs.length,
-    active: programs.filter(p => p.status === 'active').length,
-    totalBudget: programs.reduce((sum, p) => sum + p.total_budget, 0),
-    totalDistributed: programs.reduce((sum, p) => sum + p.distributed_amount, 0),
-    totalApplications: programs.reduce((sum, p) => sum + p.applications_count, 0),
-    totalApproved: programs.reduce((sum, p) => sum + p.approved_count, 0),
+    total: sourcePrograms.length,
+    active: sourcePrograms.filter(p => p.status === 'active').length,
+    totalBudget: sourcePrograms.reduce((sum, p) => sum + p.total_budget, 0),
+    totalDistributed: sourcePrograms.reduce((sum, p) => sum + p.distributed_amount, 0),
+    totalApplications: sourcePrograms.reduce((sum, p) => sum + p.applications_count, 0),
+    totalApproved: sourcePrograms.reduce((sum, p) => sum + p.approved_count, 0),
   };
 
   return (
     <div className="space-y-6">
+      {isLoading && <Card className="p-3 text-sm text-gray-600">Chargement des programmes...</Card>}
+      {loadError && <Card className="p-3 text-sm text-amber-700">{loadError}</Card>}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

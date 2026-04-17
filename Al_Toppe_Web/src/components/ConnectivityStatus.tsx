@@ -14,6 +14,7 @@ import {
 import { ErrorHandler } from '../services/errorHandler';
 import { cacheService } from '../services/cacheService';
 import { toast } from 'sonner';
+import { syncService } from '@/services/syncService';
 
 export function ConnectivityStatus() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -21,6 +22,7 @@ export function ConnectivityStatus() {
   const [isChecking, setIsChecking] = useState(false);
   const [lastSync, setLastSync] = useState<Date | null>(null);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
@@ -58,13 +60,13 @@ export function ConnectivityStatus() {
 
     // Vérifier périodiquement les opérations en attente
     const interval = setInterval(() => {
-      const pending = cacheService.getPendingSync();
-      setPendingSyncCount(pending.length);
+      setPendingSyncCount(syncService.getPendingCount());
+      setIsSyncing(syncService.isSyncInProgress());
     }, 5000);
 
     // Vérification initiale
-    const pending = cacheService.getPendingSync();
-    setPendingSyncCount(pending.length);
+    setPendingSyncCount(syncService.getPendingCount());
+    setIsSyncing(syncService.isSyncInProgress());
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -93,18 +95,19 @@ export function ConnectivityStatus() {
   };
 
   const syncPendingOperations = async () => {
-    const pending = cacheService.getPendingSync();
+    const pending = syncService.getPendingOperations();
     if (pending.length === 0) return;
 
     try {
-      // Ici, on synchroniserait les opérations en attente
-      // Pour l'instant, on les supprime simplement
-      cacheService.clearPendingSync();
-      setPendingSyncCount(0);
+      setIsSyncing(true);
+      await syncService.syncPendingOperations();
+      setPendingSyncCount(syncService.getPendingCount());
       setLastSync(new Date());
       toast.success(`${pending.length} opérations synchronisées`);
     } catch (error) {
       toast.error('Erreur lors de la synchronisation');
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -199,10 +202,11 @@ export function ConnectivityStatus() {
                   <Button
                     size="sm"
                     onClick={syncPendingOperations}
+                    disabled={isSyncing}
                     className="flex-1 bg-[#006666] hover:bg-[#004d4d]"
                   >
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    Sync
+                    <RefreshCw className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} />
+                    {isSyncing ? 'Sync...' : 'Sync'}
                   </Button>
                 )}
               </div>

@@ -28,13 +28,16 @@ import {
   XCircle
 } from 'lucide-react';
 import type { User } from '../services/api';
+import { exportRowsAsCsv, exportRowsAsExcel, exportTextAsSimplePdf } from '@/services/exportService';
+import { logExportAudit } from '@/services/exportAudit';
 
 interface AdminDashboardProps {
   user: User;
   onPageChange?: (page: string) => void;
 }
 
-export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProps) {
+export function AdminDashboard({ user, onPageChange }: AdminDashboardProps) {
+  const exportAuditFallbackKey = 'altoppe_export_audit_logs_v1';
   // Données initiales (fallback)
   const [stats, setStats] = useState({
     totalUsers: 0,
@@ -110,10 +113,53 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
     errors: number;
     details?: unknown;
   } | null>(null);
+  const [exportLogs, setExportLogs] = useState<Array<{
+    id: string;
+    actor_id: string;
+    actor_role: string;
+    scope: string;
+    format: string;
+    item_count: number;
+    created_at: string;
+  }>>([]);
+  const [exportLogRoleFilter, setExportLogRoleFilter] = useState('all');
+  const [exportLogScopeFilter, setExportLogScopeFilter] = useState('all');
+  const [exportLogSearch, setExportLogSearch] = useState('');
 
   const loadStats = async () => {
     try {
       const data = await apiService.getAdminStats();
+      const normalizedActivities = Array.isArray(data.recent_activities)
+        ? data.recent_activities.map(
+            (
+              activity: {
+                id?: string | number;
+                type?: string;
+                user?: string;
+                action?: string;
+                time?: string;
+                status?: string;
+              },
+              index: number,
+            ) => ({
+              id: activity.id ?? `activity-${index}`,
+              type: activity.type || 'system_alert',
+              user: activity.user || 'Système',
+              action: activity.action || 'Mise à jour',
+              time: activity.time || 'À l’instant',
+              status: activity.status || 'success',
+            }),
+          )
+        : [];
+      const normalizedMetrics = Array.isArray(data.system_metrics)
+        ? data.system_metrics.map(
+            (metric: { name?: string; value?: number; color?: string }, index: number) => ({
+              name: metric.name || `Métrique ${index + 1}`,
+              value: Number.isFinite(Number(metric.value)) ? Number(metric.value) : 0,
+              color: metric.color || '#006666',
+            }),
+          )
+        : [];
       setStats({
         totalUsers: data.total_users,
         activeEntrepreneurs: data.active_entrepreneurs,
@@ -125,8 +171,8 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
         fundingVsPrevLabel: data.funding_vs_prev_label ?? '—',
         systemHealth: data.system_health ?? 0,
       });
-      setRecentActivities(data.recent_activities || []);
-      setSystemMetrics(data.system_metrics || []);
+      setRecentActivities(normalizedActivities);
+      setSystemMetrics(normalizedMetrics);
       // Ne pas utiliser top_coaches de l'API, on utilisera les données réelles des coaches
       // setTopCoaches(data.top_coaches || []);
     } catch (e) {
@@ -182,7 +228,10 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
               : 0);
           
           return {
-            name: c.coach_name || c.organization || `Coach ${coach.id.substring(0, 8)}`,
+            name:
+              c.coach_name ||
+              c.organization ||
+              `Coach ${String(coach.id || 'inconnu').slice(0, 8)}`,
             entrepreneurs: entrepreneursCount,
             success_rate: typeof c.success_rate === 'number' ? c.success_rate : (c.average_rating ? Math.round(parseFloat(c.average_rating) * 10) : 85),
             id: coach.id,
@@ -206,7 +255,56 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
     loadStats();
     loadEntrepreneurs();
     loadCoaches();
+    void loadExportLogs();
   }, []);
+
+  const loadExportLogs = async () => {
+    try {
+      const data = await apiService.request<{ results?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>>('/audit/exports/?limit=200');
+      const rows = Array.isArray(data)
+        ? data
+        : (Array.isArray(data?.results) ? data.results : []);
+      const normalized = rows.map((r) => ({
+        id: String(r.id || crypto.randomUUID()),
+        actor_id: String(r.actor_id || ''),
+        actor_role: String(r.actor_role || ''),
+        scope: String(r.scope || ''),
+        format: String(r.format || ''),
+        item_count: Number(r.item_count || 0),
+        created_at: String(r.created_at || new Date().toISOString()),
+      }));
+      setExportLogs(normalized);
+    } catch {
+      try {
+        const raw = localStorage.getItem(exportAuditFallbackKey);
+        const fallback = raw ? (JSON.parse(raw) as Array<Record<string, unknown>>) : [];
+        const normalized = fallback.map((r) => ({
+          id: String(r.id || crypto.randomUUID()),
+          actor_id: String(r.actor_id || ''),
+          actor_role: String(r.actor_role || ''),
+          scope: String(r.scope || ''),
+          format: String(r.format || ''),
+          item_count: Number(r.item_count || 0),
+          created_at: String(r.created_at || new Date().toISOString()),
+        }));
+        setExportLogs(normalized);
+      } catch {
+        setExportLogs([]);
+      }
+    }
+  };
+
+  const filteredExportLogs = exportLogs.filter((row) => {
+    const byRole = exportLogRoleFilter === 'all' || row.actor_role === exportLogRoleFilter;
+    const byScope = exportLogScopeFilter === 'all' || row.scope === exportLogScopeFilter;
+    const q = exportLogSearch.trim().toLowerCase();
+    const bySearch =
+      !q ||
+      row.scope.toLowerCase().includes(q) ||
+      row.actor_role.toLowerCase().includes(q) ||
+      row.format.toLowerCase().includes(q);
+    return byRole && byScope && bySearch;
+  });
 
   const getActivityIcon = (type: string) => {
     switch (type) {
@@ -235,6 +333,120 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
     );
   };
 
+  const exportInstitutionalReports = async () => {
+    try {
+      const data = await apiService.request<unknown>('/entrepreneurs/');
+      const rows = Array.isArray((data as { results?: unknown[] })?.results)
+        ? (data as { results: unknown[] }).results
+        : (Array.isArray(data) ? data : []);
+      const normalized = rows.map((r: { id?: string; full_name?: string; phone?: string; email?: string }) => ({
+        id: r.id || '',
+        nom: r.full_name || '',
+        telephone: r.phone || '',
+        email: r.email || '',
+      }));
+      exportRowsAsCsv(`export-entrepreneurs-${new Date().toISOString().slice(0, 10)}.csv`, normalized);
+      exportRowsAsExcel(`export-entrepreneurs-${new Date().toISOString().slice(0, 10)}.xls`, normalized);
+      exportTextAsSimplePdf(
+        `export-institutionnel-${new Date().toISOString().slice(0, 10)}.pdf`,
+        'Rapport institutionnel AL-TOPPE',
+        [
+          `Date: ${new Date().toLocaleDateString('fr-FR')}`,
+          `Utilisateurs totaux: ${stats.totalUsers}`,
+          `Entrepreneurs actifs: ${stats.activeEntrepreneurs}`,
+          `Coachs: ${stats.totalCoaches}`,
+          `Bailleurs: ${stats.totalBailleurs}`,
+          `Montant total: ${stats.totalFunding}`,
+          ...normalized.slice(0, 30).map((row) => `${row.nom} - ${row.telephone} - ${row.email}`),
+        ],
+      );
+      void logExportAudit({
+        actor_id: user.id,
+        actor_role: user.role,
+        scope: 'admin_institutional_export',
+        format: 'csv,xls,pdf',
+        item_count: normalized.length,
+        metadata: {
+          totalUsers: stats.totalUsers,
+          activeEntrepreneurs: stats.activeEntrepreneurs,
+        },
+      });
+      void loadExportLogs();
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const exportAdminPriorities = () => {
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const riskRows = [
+      ...recentActivities
+        .filter((a) => ['warning', 'error', 'pending'].includes(String(a.status || '')))
+        .map((a) => ({
+          categorie: 'Alerte',
+          cible: String(a.user || 'Système'),
+          detail: String(a.action || ''),
+          niveau: String(a.status || ''),
+        })),
+      ...topCoaches
+        .filter((c) => Number(c.success_rate || 0) < 70)
+        .map((c) => ({
+          categorie: 'Coach à renforcer',
+          cible: c.name,
+          detail: `${c.entrepreneurs} entrepreneurs suivis`,
+          niveau: `${c.success_rate}%`,
+        })),
+    ];
+    const potentialRows = topCoaches
+      .filter((c) => Number(c.success_rate || 0) >= 90)
+      .map((c) => ({
+        categorie: 'Haut potentiel',
+        cible: c.name,
+        detail: `${c.entrepreneurs} entrepreneurs suivis`,
+        niveau: `${c.success_rate}%`,
+      }));
+    const rows = [...riskRows, ...potentialRows];
+    if (!rows.length) return;
+
+    exportRowsAsExcel(`admin-priorites-${dateTag}.xls`, rows);
+    exportTextAsSimplePdf(
+      `admin-priorites-${dateTag}.pdf`,
+      'Rapport admin - risques et potentiels',
+      rows.map((r) => `${r.categorie} | ${r.cible} | ${r.niveau} | ${r.detail}`),
+    );
+    void logExportAudit({
+      actor_id: user.id,
+      actor_role: user.role,
+      scope: 'admin_priorities_export',
+      format: 'xls,pdf',
+      item_count: rows.length,
+      metadata: {
+        riskRows: riskRows.length,
+        potentialRows: potentialRows.length,
+      },
+    });
+    void loadExportLogs();
+  };
+
+  const exportAuditJournal = () => {
+    if (!filteredExportLogs.length) return;
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const rows = filteredExportLogs.map((row) => ({
+      date: new Date(row.created_at).toLocaleString('fr-FR'),
+      role: row.actor_role,
+      actor: row.actor_id,
+      scope: row.scope,
+      format: row.format,
+      volume: row.item_count,
+    }));
+    exportRowsAsExcel(`journal-exports-${dateTag}.xls`, rows);
+    exportTextAsSimplePdf(
+      `journal-exports-${dateTag}.pdf`,
+      'Journal des exports AL-TOPPE',
+      rows.map((r) => `${r.date} | ${r.role} | ${r.scope} | ${r.format} | ${r.volume}`),
+    );
+  };
+
   return (
     <div className="p-4 md:p-6 lg:p-8 bg-gradient-to-br from-gray-50 via-white to-gray-50 min-h-screen space-y-8">
       {/* Header premium */}
@@ -255,30 +467,18 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
             <Button
               variant="outline"
               className="bg-white/10 text-white border-white/30 hover:bg-white/20 hover:text-white shadow-sm"
-              onClick={async () => {
-                try {
-                  const data = await apiService.request<unknown>('/entrepreneurs/');
-                  const rows = Array.isArray((data as { results?: unknown[] })?.results)
-                    ? (data as { results: unknown[] }).results
-                    : (Array.isArray(data) ? data : []);
-                  const csv = ['id,full_name,phone'].concat(
-                    rows.map((r: { id?: string; full_name?: string; phone?: string }) =>
-                      `"${r.id || ''}","${(r.full_name || '').replace(/"/g, '""')}","${r.phone || ''}"`,
-                    ),
-                  ).join('\n');
-                  const blob = new Blob([ csv ], { type: 'text/csv;charset=utf-8' });
-                  const a = document.createElement('a');
-                  a.href = URL.createObjectURL(blob);
-                  a.download = `export-entrepreneurs-${new Date().toISOString().slice(0, 10)}.csv`;
-                  a.click();
-                  URL.revokeObjectURL(a.href);
-                } catch (e) {
-                  console.error(e);
-                }
-              }}
+              onClick={exportInstitutionalReports}
             >
               <Download className="w-4 h-4 mr-2" />
               Exporter données
+            </Button>
+            <Button
+              variant="outline"
+              className="bg-white/10 text-white border-white/30 hover:bg-white/20 hover:text-white shadow-sm"
+              onClick={exportAdminPriorities}
+            >
+              <AlertTriangle className="w-4 h-4 mr-2" />
+              Export priorités
             </Button>
             <Button
               variant="outline"
@@ -535,6 +735,79 @@ export function AdminDashboard({ user: _user, onPageChange }: AdminDashboardProp
           </div>
         </Card>
       </div>
+
+      <Card className="p-6 shadow-lg border-0 bg-white/80 backdrop-blur-sm rounded-2xl hover:shadow-xl transition-shadow duration-300">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-bold text-gray-900">Journal des exports</h3>
+            <p className="text-xs text-gray-500">Traçabilité : qui, quoi, quand</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => void loadExportLogs()}>Actualiser</Button>
+            <Button className="bg-[#006666] hover:bg-[#004d4d]" onClick={exportAuditJournal}>
+              Export journal
+            </Button>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
+          <Input
+            value={exportLogSearch}
+            onChange={(e) => setExportLogSearch(e.target.value)}
+            placeholder="Rechercher scope / format / rôle"
+          />
+          <select
+            value={exportLogRoleFilter}
+            onChange={(e) => setExportLogRoleFilter(e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="all">Tous rôles</option>
+            <option value="admin">Admin</option>
+            <option value="coach">Coach</option>
+            <option value="bailleur">Bailleur</option>
+          </select>
+          <select
+            value={exportLogScopeFilter}
+            onChange={(e) => setExportLogScopeFilter(e.target.value)}
+            className="h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="all">Tous scopes</option>
+            <option value="admin_institutional_export">Admin institutionnel</option>
+            <option value="admin_priorities_export">Admin priorités</option>
+            <option value="coach_performance">Coach performance</option>
+            <option value="coach_corrective_actions">Coach actions correctives</option>
+            <option value="bailleur_risk_potential">Bailleur risques/potentiels</option>
+          </select>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Date</TableHead>
+              <TableHead>Rôle</TableHead>
+              <TableHead>Scope</TableHead>
+              <TableHead>Format</TableHead>
+              <TableHead>Volume</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredExportLogs.slice(0, 20).map((row) => (
+              <TableRow key={row.id}>
+                <TableCell>{new Date(row.created_at).toLocaleString('fr-FR')}</TableCell>
+                <TableCell>{row.actor_role || '-'}</TableCell>
+                <TableCell>{row.scope || '-'}</TableCell>
+                <TableCell>{row.format || '-'}</TableCell>
+                <TableCell>{row.item_count}</TableCell>
+              </TableRow>
+            ))}
+            {filteredExportLogs.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center text-gray-500 py-6">
+                  Aucun log d'export trouvé.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </Card>
 
       {/* Journal des Transactions */}
       <div className="mb-6">

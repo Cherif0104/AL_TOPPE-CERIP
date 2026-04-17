@@ -305,3 +305,49 @@ export async function bulkAssignCoach(payload: {
     },
   };
 }
+
+export async function createExportAuditLog(payload: Record<string, unknown>) {
+  try {
+    const client = sb();
+    const row = {
+      actor_id: String(payload.actor_id || ''),
+      actor_role: String(payload.actor_role || ''),
+      scope: String(payload.scope || ''),
+      format: String(payload.format || ''),
+      item_count: Number(payload.item_count || 0),
+      metadata: (payload.metadata && typeof payload.metadata === 'object') ? payload.metadata : {},
+      created_at: new Date().toISOString(),
+    };
+    const { data, error } = await client
+      .from("export_audit_logs")
+      .insert(row)
+      .select("*")
+      .single();
+    if (error) throw error;
+    return data || row;
+  } catch (error) {
+    if (!isSupabaseSchemaOrPermissionError(error)) throw error;
+    return {
+      id: crypto.randomUUID(),
+      ...payload,
+      fallback: true,
+      created_at: new Date().toISOString(),
+    };
+  }
+}
+
+export async function listExportAuditLogs(limit = 100) {
+  try {
+    const client = sb();
+    const { data, error } = await client
+      .from("export_audit_logs")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    if (!isSupabaseSchemaOrPermissionError(error)) throw error;
+    return [];
+  }
+}

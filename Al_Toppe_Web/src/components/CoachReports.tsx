@@ -26,11 +26,21 @@ import {
   Calendar,
   Target,
   Clock,
-  BarChart3
+  BarChart3,
+  AlertTriangle
 } from 'lucide-react';
 
 import { User as UserType } from '../services/api';
 import { cn } from '@/lib/utils';
+import { exportRowsAsCsv, exportRowsAsExcel, exportTextAsSimplePdf } from '@/services/exportService';
+import { logExportAudit } from '@/services/exportAudit';
+import {
+  createCorrectiveAction,
+  listCorrectiveActionsByCoach,
+  updateCorrectiveActionStatus as persistCorrectiveActionStatus,
+  type CorrectiveAction,
+  type CorrectiveActionStatus,
+} from '@/services/coachCorrectiveActions';
 
 interface CoachReportsProps {
   user: UserType;
@@ -78,6 +88,9 @@ export function CoachReports({ user }: CoachReportsProps) {
   const [selectedPeriod, setSelectedPeriod] = useState('last_month');
   const [isLoading, setIsLoading] = useState(true);
   const [, setData] = useState<unknown>(null);
+  const [correctiveActions, setCorrectiveActions] = useState<CorrectiveAction[]>([]);
+  const [actionStatusFilter, setActionStatusFilter] = useState<'all' | CorrectiveActionStatus>('all');
+  const [actionSearch, setActionSearch] = useState('');
 
   // Données pour les graphiques (états initialisés avec des mocks comme fallback)
   const [monthlyPerformance, setMonthlyPerformance] = useState<MonthlyPerformanceItem[]>([
@@ -125,6 +138,144 @@ export function CoachReports({ user }: CoachReportsProps) {
     avgRevenueGrowth: 180
   });
 
+  const prioritizedRiskCases = entrepreneurProgress
+    .map((item) => {
+      let riskScore = 0;
+      const notes: string[] = [];
+      if (item.progress < 50) {
+        riskScore += 40;
+        notes.push('Progression faible');
+      }
+      if (item.current_revenue < item.initial_revenue) {
+        riskScore += 35;
+        notes.push('Revenu en baisse');
+      }
+      if (item.sessions < 6) {
+        riskScore += 20;
+        notes.push('Peu de sessions');
+      }
+      return { ...item, riskScore: Math.min(100, riskScore), notes };
+    })
+    .filter((item) => item.riskScore >= 30)
+    .sort((a, b) => b.riskScore - a.riskScore)
+    .slice(0, 6);
+
+  const loadCorrectiveActions = () => {
+    const coachId = String(resolveCoachId(user) || user.id);
+    setCorrectiveActions(listCorrectiveActionsByCoach(coachId));
+  };
+
+  useEffect(() => {
+    loadCorrectiveActions();
+    const onFocus = () => loadCorrectiveActions();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  const handleCreateCorrectiveAction = async (risk: { name: string; riskScore: number; notes: string[] }) => {
+    const defaultAction = `Action prioritaire pour ${risk.name}: ${risk.notes.join(', ')}.`;
+    const result = await Swal.fire({
+      title: 'Créer action corrective',
+      input: 'textarea',
+      inputValue: defaultAction,
+      inputLabel: `Plan d'action (${risk.riskScore}% risque)`,
+      inputPlaceholder: 'Décrire l’action corrective...',
+      showCancelButton: true,
+      confirmButtonText: 'Enregistrer',
+      cancelButtonText: 'Annuler',
+      confirmButtonColor: '#006666',
+      inputValidator: (value) => {
+        if (!String(value || '').trim()) return 'Veuillez décrire une action corrective.';
+        return undefined;
+      },
+    });
+    if (!result.isConfirmed) return;
+    try {
+      createCorrectiveAction({
+        coach_id: resolveCoachId(user) || user.id,
+        entrepreneur_name: risk.name,
+        risk_score: risk.riskScore,
+        risk_notes: risk.notes,
+        action: String(result.value || '').trim(),
+      });
+      loadCorrectiveActions();
+      Swal.fire({
+        icon: 'success',
+        title: 'Action corrective enregistrée',
+        timer: 1500,
+        showConfirmButton: false,
+      });
+    } catch (e) {
+      console.error(e);
+      Swal.fire({
+        icon: 'error',
+        title: 'Erreur',
+        text: "Impossible d'enregistrer l'action corrective.",
+        confirmButtonColor: '#006666',
+      });
+    }
+  };
+
+  const updateCorrectiveActionStatus = (id: string, nextStatus: CorrectiveActionStatus) => {
+    persistCorrectiveActionStatus(id, nextStatus);
+    loadCorrectiveActions();
+  };
+
+  const filteredCorrectiveActions = correctiveActions.filter((row) => {
+    const byStatus = actionStatusFilter === 'all' || row.status === actionStatusFilter;
+    const q = actionSearch.trim().toLowerCase();
+    const bySearch =
+      !q ||
+      row.entrepreneur_name.toLowerCase().includes(q) ||
+      row.action.toLowerCase().includes(q);
+    return byStatus && bySearch;
+  });
+
+  const exportCorrectiveActions = () => {
+    if (!filteredCorrectiveActions.length) {
+      Swal.fire({
+        icon: 'info',
+        title: 'Aucune donnée',
+        text: "Aucune action corrective à exporter avec les filtres actuels.",
+        confirmButtonColor: '#006666',
+      });
+      return;
+    }
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const rows = filteredCorrectiveActions.map((row) => ({
+      entrepreneur: row.entrepreneur_name,
+      statut: row.status === 'done' ? 'Terminé' : row.status === 'in_progress' ? 'En cours' : 'À faire',
+      accuse_reception: row.entrepreneur_acknowledged_at ? 'Vu / Compris' : 'Non confirmé',
+      risque: `${row.risk_score}%`,
+      action: row.action,
+      date: new Date(row.created_at).toLocaleString('fr-FR'),
+    }));
+
+    exportRowsAsExcel(`actions-correctives-coach-${dateTag}.xls`, rows);
+    exportTextAsSimplePdf(
+      `actions-correctives-coach-${dateTag}.pdf`,
+      'Historique des actions correctives coach',
+      rows.map(
+        (r) => `${r.date} | ${r.entrepreneur} | ${r.statut} | ${r.accuse_reception} | ${r.risque} | ${r.action}`,
+      ),
+    );
+    void logExportAudit({
+      actor_id: resolveCoachId(user) || user.id,
+      actor_role: user.role,
+      scope: 'coach_corrective_actions',
+      format: 'xls,pdf',
+      item_count: rows.length,
+      metadata: { period: selectedPeriod, statusFilter: actionStatusFilter },
+    });
+    Swal.fire({
+      icon: 'success',
+      title: 'Export réalisé',
+      text: 'Les fichiers Excel et PDF ont été générés.',
+      confirmButtonColor: '#006666',
+    });
+  };
+
   // Fonction helper pour calculer les dates selon la période sélectionnée
   const getDateRange = (period: string) => {
     const today = new Date();
@@ -134,30 +285,40 @@ export function CoachReports({ user }: CoachReportsProps) {
     
     switch (period) {
       case 'last_week':
-        const lastWeek = new Date(today);
-        lastWeek.setDate(today.getDate() - 7);
-        dateFrom = lastWeek.toISOString().split('T')[0];
+        {
+          const lastWeek = new Date(today);
+          lastWeek.setDate(today.getDate() - 7);
+          dateFrom = lastWeek.toISOString().split('T')[0];
+        }
         break;
       case 'last_month':
-        const lastMonth = new Date(today);
-        lastMonth.setMonth(today.getMonth() - 1);
-        dateFrom = lastMonth.toISOString().split('T')[0];
+        {
+          const lastMonth = new Date(today);
+          lastMonth.setMonth(today.getMonth() - 1);
+          dateFrom = lastMonth.toISOString().split('T')[0];
+        }
         break;
       case 'last_quarter':
-        const lastQuarter = new Date(today);
-        lastQuarter.setMonth(today.getMonth() - 3);
-        dateFrom = lastQuarter.toISOString().split('T')[0];
+        {
+          const lastQuarter = new Date(today);
+          lastQuarter.setMonth(today.getMonth() - 3);
+          dateFrom = lastQuarter.toISOString().split('T')[0];
+        }
         break;
       case 'last_year':
-        const lastYear = new Date(today);
-        lastYear.setFullYear(today.getFullYear() - 1);
-        dateFrom = lastYear.toISOString().split('T')[0];
+        {
+          const lastYear = new Date(today);
+          lastYear.setFullYear(today.getFullYear() - 1);
+          dateFrom = lastYear.toISOString().split('T')[0];
+        }
         break;
       default:
         // Par défaut : dernier mois
-        const defaultDate = new Date(today);
-        defaultDate.setMonth(today.getMonth() - 1);
-        dateFrom = defaultDate.toISOString().split('T')[0];
+        {
+          const defaultDate = new Date(today);
+          defaultDate.setMonth(today.getMonth() - 1);
+          dateFrom = defaultDate.toISOString().split('T')[0];
+        }
     }
     
     return { dateFrom, dateTo };
@@ -493,13 +654,63 @@ export function CoachReports({ user }: CoachReportsProps) {
     }
   };
 
-  // Mode "affichage uniquement" : exports désactivés (PDF/Excel/JSON)
-  const showExportDisabled = () => {
+  const exportData = () => {
+    const rows = monthlyPerformance.map((item) => ({
+      mois: item.month,
+      sessions: item.sessions,
+      entrepreneurs: item.entrepreneurs,
+      taux_succes: `${item.success_rate}%`,
+    }));
+    if (!rows.length) {
+      Swal.fire({
+        title: 'Aucune donnée',
+        text: "Aucune donnée à exporter pour cette période.",
+        icon: 'info',
+        confirmButtonColor: '#006666',
+      });
+      return;
+    }
+    exportRowsAsCsv(`coach-rapport-${selectedPeriod}.csv`, rows);
+    exportRowsAsExcel(`coach-rapport-${selectedPeriod}.xls`, rows);
+    void logExportAudit({
+      actor_id: resolveCoachId(user) || user.id,
+      actor_role: user.role,
+      scope: 'coach_performance',
+      format: 'csv,xls',
+      item_count: rows.length,
+      metadata: { selectedPeriod, reportType },
+    });
     Swal.fire({
-      title: 'Export désactivé',
-      text: "Cette page est en mode affichage uniquement. L'export (PDF/Excel) n'est pas activé.",
-      icon: 'info',
-      confirmButtonColor: '#006666'
+      title: 'Export réussi',
+      text: 'Les exports CSV et Excel ont été générés.',
+      icon: 'success',
+      confirmButtonColor: '#006666',
+    });
+  };
+
+  const exportPdf = () => {
+    const lines = [
+      `Période: ${selectedPeriod}`,
+      `Sessions totales: ${stats.totalSessions}`,
+      `Entrepreneurs actifs: ${stats.totalEntrepreneurs}`,
+      `Taux de succès: ${stats.successRate}%`,
+      `Heures totales: ${stats.totalHours}`,
+      ...monthlyPerformance.slice(0, 12).map((item) =>
+        `${item.month} - sessions: ${item.sessions}, entrepreneurs: ${item.entrepreneurs}, succès: ${item.success_rate}%`,
+      ),
+    ];
+    exportTextAsSimplePdf(
+      `coach-rapport-${selectedPeriod}.pdf`,
+      'Rapport de performance coach',
+      lines,
+    );
+    void logExportAudit({
+      actor_id: resolveCoachId(user) || user.id,
+      actor_role: user.role,
+      scope: 'coach_performance',
+      format: 'pdf',
+      item_count: lines.length,
+      metadata: { selectedPeriod, reportType },
     });
   };
 
@@ -528,18 +739,18 @@ export function CoachReports({ user }: CoachReportsProps) {
           <h1 className="text-xl md:text-2xl font-bold text-gray-900">Rapports de Performance</h1>
           <p className="text-sm md:text-base text-gray-600">Analysez votre impact et vos résultats de coaching</p>
         </div>
-        {/* <div className="flex items-center gap-2 sm:space-x-3">
-          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={showExportDisabled}>
+        <div className="flex items-center gap-2 sm:space-x-3">
+          <Button variant="outline" size="sm" className="flex-1 sm:flex-none" onClick={exportData}>
             <BarChart3 className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Exporter données</span>
             <span className="sm:hidden">Export</span>
           </Button>
-          <Button className="bg-[#006666] hover:bg-[#004d4d] flex-1 sm:flex-none text-white" size="sm" onClick={showExportDisabled}>
+          <Button className="bg-[#006666] hover:bg-[#004d4d] flex-1 sm:flex-none text-white" size="sm" onClick={exportPdf}>
             <Download className="w-4 h-4 mr-2" />
             <span className="hidden sm:inline">Télécharger PDF</span>
             <span className="sm:hidden">PDF</span>
           </Button>
-        </div> */}
+        </div>
       </div>
 
       {/* Filtres — <select> natif pour éviter conflits de portails Radix / mobile */}
@@ -642,6 +853,144 @@ export function CoachReports({ user }: CoachReportsProps) {
           </div>
         </Card>
       </div>
+
+      {prioritizedRiskCases.length > 0 && (
+        <Card className="p-4 border-red-200 bg-red-50/60">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-700" />
+              <h3 className="font-semibold text-red-900">Entrepreneurs à risque priorisés</h3>
+            </div>
+            <span className="text-xs text-red-700">{prioritizedRiskCases.length} cas</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {prioritizedRiskCases.map((item) => (
+              <div key={item.name} className="rounded-lg border border-red-200 bg-white p-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="text-sm font-semibold text-gray-900">{item.name}</p>
+                  <span className="text-xs font-medium text-red-700">Risque {item.riskScore}%</span>
+                </div>
+                <p className="text-xs text-red-700">{item.notes.join(' • ')}</p>
+                <div className="mt-2 flex justify-end">
+                  <Button
+                    size="sm"
+                    className="bg-[#006666] hover:bg-[#004d4d] text-white"
+                    onClick={() => void handleCreateCorrectiveAction(item)}
+                  >
+                    Action corrective
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <Card className="p-4 border-[#006666]/20">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold text-gray-900">Historique des actions correctives</h3>
+          <span className="text-xs text-gray-500">{filteredCorrectiveActions.length} action(s)</span>
+        </div>
+        <div className="mb-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+          <input
+            type="text"
+            value={actionSearch}
+            onChange={(e) => setActionSearch(e.target.value)}
+            placeholder="Rechercher entrepreneur ou action..."
+            className="h-9 rounded-md border border-input px-3 text-sm"
+          />
+          <select
+            value={actionStatusFilter}
+            onChange={(e) => setActionStatusFilter(e.target.value as 'all' | CorrectiveActionStatus)}
+            className="h-9 rounded-md border border-input px-3 text-sm"
+          >
+            <option value="all">Tous statuts</option>
+            <option value="todo">À faire</option>
+            <option value="in_progress">En cours</option>
+            <option value="done">Terminé</option>
+          </select>
+          <Button
+            variant="outline"
+            onClick={loadCorrectiveActions}
+            className="h-9"
+          >
+            Actualiser
+          </Button>
+        </div>
+        <div className="mb-3 flex justify-end">
+          <Button
+            className="bg-[#006666] hover:bg-[#004d4d] text-white"
+            onClick={exportCorrectiveActions}
+          >
+            Exporter historique (Excel + PDF)
+          </Button>
+        </div>
+        {filteredCorrectiveActions.length === 0 ? (
+          <p className="text-sm text-gray-500">Aucune action corrective enregistrée pour ce coach.</p>
+        ) : (
+          <div className="space-y-2">
+            {filteredCorrectiveActions.slice(0, 20).map((row) => (
+              <div key={row.id} className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-gray-900">{row.entrepreneur_name}</p>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">
+                      {new Date(row.created_at).toLocaleString('fr-FR')}
+                    </span>
+                    <Badge
+                      className={
+                        row.status === 'done'
+                          ? 'bg-green-100 text-green-800'
+                          : row.status === 'in_progress'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-amber-100 text-amber-800'
+                      }
+                    >
+                      {row.status === 'done' ? 'Terminé' : row.status === 'in_progress' ? 'En cours' : 'À faire'}
+                    </Badge>
+                    <Badge
+                      className={
+                        row.entrepreneur_acknowledged_at
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-gray-100 text-gray-700'
+                      }
+                    >
+                      {row.entrepreneur_acknowledged_at ? 'Vu / Compris' : 'Non confirmé'}
+                    </Badge>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-700 mb-2">{row.action}</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => updateCorrectiveActionStatus(row.id, 'todo')}
+                    disabled={row.status === 'todo'}
+                  >
+                    À faire
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => updateCorrectiveActionStatus(row.id, 'in_progress')}
+                    disabled={row.status === 'in_progress'}
+                  >
+                    En cours
+                  </Button>
+                  <Button
+                    size="sm"
+                    className="bg-[#006666] hover:bg-[#004d4d] text-white"
+                    onClick={() => updateCorrectiveActionStatus(row.id, 'done')}
+                    disabled={row.status === 'done'}
+                  >
+                    Terminer
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
         {/* Performance mensuelle */}
@@ -868,11 +1217,11 @@ export function CoachReports({ user }: CoachReportsProps) {
       {/* <Card className="p-4 md:p-6 shadow-sm border-gray-100">
         <h3 className="font-semibold text-gray-900 mb-4">Actions rapides</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Button variant="outline" className="h-20 flex-col space-y-2 py-3 border-dashed hover:border-[#006666] hover:bg-[#006666]/5 group transition-all" onClick={showExportDisabled}>
+          <Button variant="outline" className="h-20 flex-col space-y-2 py-3 border-dashed hover:border-[#006666] hover:bg-[#006666]/5 group transition-all" onClick={exportData}>
             <FileText className="w-6 h-6 text-gray-400 group-hover:text-[#006666]" />
             <span className="text-xs md:text-sm font-medium">Rapport détaillé</span>
           </Button>
-          <Button variant="outline" className="h-20 flex-col space-y-2 py-3 border-dashed hover:border-[#006666] hover:bg-[#006666]/5 group transition-all" onClick={showExportDisabled}>
+          <Button variant="outline" className="h-20 flex-col space-y-2 py-3 border-dashed hover:border-[#006666] hover:bg-[#006666]/5 group transition-all" onClick={exportPdf}>
             <Download className="w-6 h-6 text-gray-400 group-hover:text-[#006666]" />
             <span className="text-xs md:text-sm font-medium">Exporter Excel</span>
           </Button>

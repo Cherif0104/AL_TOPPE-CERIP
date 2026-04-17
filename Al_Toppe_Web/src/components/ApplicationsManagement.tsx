@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -26,6 +26,7 @@ import {
   Building,
   Star
 } from 'lucide-react';
+import { apiService } from '@/services/api';
 
 export function ApplicationsManagement() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -33,6 +34,27 @@ export function ApplicationsManagement() {
   const [filterProgram, setFilterProgram] = useState('all');
   const [selectedApplication, setSelectedApplication] = useState<any>(null);
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [remoteApplications, setRemoteApplications] = useState<Array<Record<string, unknown>>>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const raw = await apiService.request<unknown>('/business-plans/');
+        const plans = Array.isArray(raw) ? raw as Array<Record<string, unknown>> : [];
+        setRemoteApplications(plans);
+      } catch (e) {
+        console.error(e);
+        setLoadError("Lecture Supabase indisponible, fallback local.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    void load();
+  }, []);
 
   // Données mockées des candidatures
   const applications = [
@@ -222,7 +244,50 @@ export function ApplicationsManagement() {
     }).format(amount).replace('XOF', 'FCFA');
   };
 
-  const filteredApplications = applications.filter(application => {
+  const sourceApplications = remoteApplications.length
+    ? remoteApplications.map((p, idx) => ({
+        id: idx + 1,
+        entrepreneur: {
+          name: String(p.entrepreneur_name || 'Entrepreneur'),
+          phone: '',
+          email: '',
+          location: '',
+          business: String(p.activity_title || p.sector_display || 'Activité'),
+          sector: String(p.sector_display || 'General'),
+          cni: '',
+          experience: '',
+        },
+        program: {
+          id: idx + 1,
+          name: String(p.title || 'Programme'),
+          type: String(p.financing_type || 'Grant'),
+        },
+        amount_requested: Number((p.financial_projections as Record<string, unknown> | undefined)?.requested_amount || 0),
+        submitted_at: String(p.created_at || '').slice(0, 10),
+        status: String(p.status || 'pending'),
+        score: Number(p.score || 70),
+        business_plan: {
+          summary: String(p.summary || ''),
+          market_analysis: '',
+          financial_projections: {
+            year1_revenue: 0,
+            year2_revenue: 0,
+            year3_revenue: 0,
+          },
+        },
+        documents: [],
+        evaluation: {
+          innovation: 0,
+          feasibility: 0,
+          market_potential: 0,
+          team: 0,
+          financial_viability: 0,
+        },
+        notes: '',
+      }))
+    : applications;
+
+  const filteredApplications = sourceApplications.filter(application => {
     const matchesSearch = application.entrepreneur.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          application.entrepreneur.business.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || application.status === filterStatus;
@@ -232,13 +297,15 @@ export function ApplicationsManagement() {
   });
 
   const stats = {
-    total: applications.length,
-    pending: applications.filter(a => a.status === 'pending').length,
-    under_review: applications.filter(a => a.status === 'under_review').length,
-    approved: applications.filter(a => a.status === 'approved').length,
-    rejected: applications.filter(a => a.status === 'rejected').length,
-    total_requested: applications.reduce((sum, a) => sum + a.amount_requested, 0),
-    avg_score: Math.round(applications.reduce((sum, a) => sum + a.score, 0) / applications.length)
+    total: sourceApplications.length,
+    pending: sourceApplications.filter(a => a.status === 'pending').length,
+    under_review: sourceApplications.filter(a => a.status === 'under_review').length,
+    approved: sourceApplications.filter(a => a.status === 'approved').length,
+    rejected: sourceApplications.filter(a => a.status === 'rejected').length,
+    total_requested: sourceApplications.reduce((sum, a) => sum + a.amount_requested, 0),
+    avg_score: sourceApplications.length
+      ? Math.round(sourceApplications.reduce((sum, a) => sum + a.score, 0) / sourceApplications.length)
+      : 0
   };
 
   const renderStarRating = (rating: number) => {
@@ -262,6 +329,8 @@ export function ApplicationsManagement() {
 
   return (
     <div className="space-y-6">
+      {isLoading && <Card className="p-3 text-sm text-gray-600">Chargement des candidatures...</Card>}
+      {loadError && <Card className="p-3 text-sm text-amber-700">{loadError}</Card>}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

@@ -47,6 +47,23 @@ function coachingViaSupabase(): boolean {
   return isSupabaseAuthActive();
 }
 
+function extractErrorMessageFromBody(raw: unknown, fallback: string): string {
+  if (!raw) return fallback;
+  if (typeof raw === "string") return raw || fallback;
+  if (typeof raw !== "object") return fallback;
+  const body = raw as {
+    detail?: unknown;
+    message?: unknown;
+    non_field_errors?: unknown;
+  };
+  if (typeof body.detail === "string" && body.detail.trim()) return body.detail;
+  if (typeof body.message === "string" && body.message.trim()) return body.message;
+  if (Array.isArray(body.non_field_errors) && body.non_field_errors.length > 0) {
+    return String(body.non_field_errors[0] || fallback);
+  }
+  return fallback;
+}
+
 export const coachService = {
   async getCoachEntrepreneurs(coachId: string) {
     if (coachingViaSupabase()) {
@@ -299,7 +316,21 @@ export const coachService = {
       headers: getAuthHeaders("application/json"),
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Erreur modification session");
+    if (!res.ok) {
+      const raw = await res.text().catch(() => null);
+      let parsed: unknown = null;
+      try {
+        parsed = raw ? JSON.parse(raw) : null;
+      } catch {
+        parsed = raw;
+      }
+      const err = new Error(
+        extractErrorMessageFromBody(parsed, "Erreur modification session"),
+      ) as Error & { status?: number; body?: unknown };
+      err.status = res.status;
+      err.body = parsed;
+      throw err;
+    }
     return await res.json();
   },
 
@@ -315,7 +346,21 @@ export const coachService = {
       method: "DELETE",
       headers: getAuthHeaders(null),
     });
-    if (!res.ok) throw new Error("Erreur suppression session");
+    if (!res.ok) {
+      const raw = await res.text().catch(() => null);
+      let parsed: unknown = null;
+      try {
+        parsed = raw ? JSON.parse(raw) : null;
+      } catch {
+        parsed = raw;
+      }
+      const err = new Error(
+        extractErrorMessageFromBody(parsed, "Erreur suppression session"),
+      ) as Error & { status?: number; body?: unknown };
+      err.status = res.status;
+      err.body = parsed;
+      throw err;
+    }
     return true;
   },
 

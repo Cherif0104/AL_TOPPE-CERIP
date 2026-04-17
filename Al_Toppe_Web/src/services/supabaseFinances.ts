@@ -1,6 +1,19 @@
 import { getSupabase } from "@/lib/supabaseClient";
 
 type TxType = "income" | "expense";
+type PaymentMethod = "cash" | "orange_money" | "wave" | "virement";
+
+export interface ParsedCaptureTransaction {
+  type: TxType;
+  amount: number;
+  category_name?: string;
+  title?: string;
+  description?: string;
+  date?: string;
+  payment_method?: PaymentMethod;
+  client_supplier?: string;
+  invoice_number?: string;
+}
 
 function sb() {
   const client = getSupabase();
@@ -39,6 +52,34 @@ export async function listFinanceCategories() {
     if (!isSupabaseSchemaOrPermissionError(error)) throw error;
     return [];
   }
+}
+
+async function resolveCategoryIdByName(
+  categoryName: string | undefined,
+  type: TxType,
+): Promise<string | null> {
+  if (!categoryName) return null;
+  const client = sb();
+  const raw = String(categoryName).trim();
+  if (!raw) return null;
+
+  const { data: exact } = await client
+    .from("finance_categories")
+    .select("id,name,type")
+    .eq("type", type)
+    .ilike("name", raw)
+    .limit(1)
+    .maybeSingle();
+  if (exact?.id) return String(exact.id);
+
+  const { data: fuzzy } = await client
+    .from("finance_categories")
+    .select("id,name,type")
+    .eq("type", type)
+    .ilike("name", `%${raw}%`)
+    .limit(1)
+    .maybeSingle();
+  return fuzzy?.id ? String(fuzzy.id) : null;
 }
 
 export async function listCashflowEntries(
@@ -99,6 +140,48 @@ export async function updateCashflowEntry(
     .single();
   if (error) throw error;
   return data;
+}
+
+export async function createCashflowEntriesFromCapture(
+  entrepreneurId: string,
+  transactions: ParsedCaptureTransaction[],
+): Promise<Array<Record<string, unknown>>> {
+  if (!entrepreneurId || !Array.isArray(transactions) || transactions.length === 0) {
+    return [];
+  }
+  const client = sb();
+  const created: Array<Record<string, unknown>> = [];
+
+  for (const tx of transactions) {
+    const amount = Number(tx.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const type: TxType = normalizeTxType(tx.type);
+    const categoryName = String(tx.category_name || "").trim() || "Non catégorisé";
+    const categoryId = await resolveCategoryIdByName(categoryName, type);
+    const row: Record<string, unknown> = {
+      entrepreneur_id: entrepreneurId,
+      type,
+      title: String(tx.title || tx.description || (type === "income" ? "Recette" : "Dépense")),
+      description: String(tx.description || tx.title || ""),
+      amount,
+      date: String(tx.date || new Date().toISOString().slice(0, 10)),
+      category_id: categoryId,
+      category_name: categoryName,
+      payment_method: String(tx.payment_method || "cash"),
+      client_supplier: tx.client_supplier ? String(tx.client_supplier) : null,
+      invoice_number: tx.invoice_number ? String(tx.invoice_number) : null,
+      has_invoice: Boolean(tx.invoice_number),
+    };
+
+    const { data, error } = await client
+      .from("cashflow_entries")
+      .insert(row)
+      .select("*")
+      .single();
+    if (error) throw error;
+    if (data) created.push(data as Record<string, unknown>);
+  }
+  return created;
 }
 
 export async function getFinanceSummary(

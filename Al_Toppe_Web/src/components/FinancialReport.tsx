@@ -11,13 +11,18 @@ import {
   TrendingUp,
   TrendingDown,
   DollarSign,
-  RefreshCw
+  RefreshCw,
+  AlertTriangle,
+  BellRing,
+  MessageCircle
 } from 'lucide-react';
 import { apiService } from '@/services/api';
+import { toast } from 'sonner';
 
 interface FinancialReportProps {
   entrepreneurId: string;
 }
+const FINANCE_UPDATED_EVENT = 'altoppe:finance-updated';
 
 interface ReportData {
   period: {
@@ -51,10 +56,15 @@ interface ReportData {
 
 export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
   const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [previousSummary, setPreviousSummary] = useState<ReportData['summary'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [exporting, setExporting] = useState(false);
+  const [remindersEnabled, setRemindersEnabled] = useState(true);
+  const [rentReminderEnabled, setRentReminderEnabled] = useState(true);
+  const [stockReminderEnabled, setStockReminderEnabled] = useState(true);
+  const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
 
   // Initialiser les dates (30 derniers jours par défaut)
   useEffect(() => {
@@ -73,6 +83,81 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
     }
   }, [startDate, endDate, entrepreneurId]);
 
+  useEffect(() => {
+    const raw = localStorage.getItem(`altoppe_reminders:${entrepreneurId}`);
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw) as {
+        remindersEnabled?: boolean;
+        rentReminderEnabled?: boolean;
+        stockReminderEnabled?: boolean;
+      };
+      setRemindersEnabled(parsed.remindersEnabled ?? true);
+      setRentReminderEnabled(parsed.rentReminderEnabled ?? true);
+      setStockReminderEnabled(parsed.stockReminderEnabled ?? true);
+    } catch {
+      // ignore
+    }
+  }, [entrepreneurId]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      `altoppe_reminders:${entrepreneurId}`,
+      JSON.stringify({
+        remindersEnabled,
+        rentReminderEnabled,
+        stockReminderEnabled,
+      }),
+    );
+  }, [entrepreneurId, remindersEnabled, rentReminderEnabled, stockReminderEnabled]);
+
+  useEffect(() => {
+    if (!entrepreneurId || !remindersEnabled) return;
+    const tick = () => {
+      const now = new Date();
+      const dateKey = now.toISOString().slice(0, 10);
+      const hour = now.getHours();
+      const dayOfMonth = now.getDate();
+      const dayOfWeek = now.getDay();
+
+      if (hour >= 19) {
+        const key = `altoppe_reminder:end-day:${entrepreneurId}:${dateKey}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, '1');
+          toast.message('Rappel fin de journée', {
+            description: 'Pensez à saisir ventes et dépenses du jour.',
+          });
+        }
+      }
+
+      if (rentReminderEnabled && dayOfMonth >= 25 && dayOfMonth <= 28 && hour >= 9) {
+        const monthKey = dateKey.slice(0, 7);
+        const key = `altoppe_reminder:rent:${entrepreneurId}:${monthKey}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, '1');
+          toast.message('Rappel loyer/charges fixes', {
+            description: 'Vérifiez loyer, internet, électricité et autres charges fixes.',
+          });
+        }
+      }
+
+      if (stockReminderEnabled && dayOfWeek === 1 && hour >= 10) {
+        const weekId = `${dateKey}-w${Math.ceil(now.getDate() / 7)}`;
+        const key = `altoppe_reminder:stock:${entrepreneurId}:${weekId}`;
+        if (!localStorage.getItem(key)) {
+          localStorage.setItem(key, '1');
+          toast.message('Rappel stock', {
+            description: 'Faites un contrôle des stocks pour éviter les ruptures.',
+          });
+        }
+      }
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 60_000);
+    return () => window.clearInterval(interval);
+  }, [entrepreneurId, remindersEnabled, rentReminderEnabled, stockReminderEnabled]);
+
   const fetchReport = async () => {
     if (!startDate || !endDate) return;
     
@@ -83,8 +168,21 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
         end_date: endDate,
       });
       setReportData(data as ReportData);
+
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      const diffMs = Math.max(86_400_000, end.getTime() - start.getTime());
+      const prevEnd = new Date(start.getTime() - 86_400_000);
+      const prevStart = new Date(prevEnd.getTime() - diffMs);
+      const prev = await apiService.getFinanceSummary(entrepreneurId, {
+        start_date: prevStart.toISOString().slice(0, 10),
+        end_date: prevEnd.toISOString().slice(0, 10),
+      });
+      setPreviousSummary((prev as ReportData).summary || null);
+      setLastRefreshAt(new Date().toISOString());
     } catch (error) {
       console.error('Erreur lors du chargement du rapport:', error);
+      setPreviousSummary(null);
     } finally {
       setLoading(false);
     }
@@ -123,6 +221,62 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
     }).format(amount);
   };
 
+  const handleShareWhatsApp = () => {
+    if (!reportData) return;
+    const message = [
+      'Rapport financier AL-TOPPE',
+      `Période: ${reportData.period.start_date_display} au ${reportData.period.end_date_display}`,
+      `Produits: ${formatCurrency(reportData.summary.total_produits)}`,
+      `Charges: ${formatCurrency(reportData.summary.total_charges)}`,
+      `Bénéfice: ${formatCurrency(reportData.summary.benefice)}`,
+      `Marge: ${reportData.summary.marge_beneficiaire.toFixed(2)}%`,
+      window.location.href,
+    ].join('\n');
+    const url = `https://wa.me/?text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const alerts: string[] = [];
+  if (reportData) {
+    const margin = reportData.summary.marge_beneficiaire;
+    if (margin < 12) {
+      alerts.push('Baisse de marge détectée : marge inférieure à 12%.');
+    }
+    if (previousSummary && margin < previousSummary.marge_beneficiaire - 10) {
+      alerts.push(
+        `Baisse de marge vs période précédente (${previousSummary.marge_beneficiaire.toFixed(1)}% -> ${margin.toFixed(1)}%).`,
+      );
+    }
+    if (reportData.summary.total_charges > reportData.summary.total_produits * 0.85) {
+      alerts.push('Dépenses anormales : les charges dépassent 85% des produits.');
+    }
+    const topCharge = [...reportData.charges_by_category].sort((a, b) => b.percentage - a.percentage)[0];
+    if (topCharge && topCharge.percentage >= 45) {
+      alerts.push(`Dépense concentrée sur "${topCharge.category_name}" (${topCharge.percentage.toFixed(1)}%).`);
+    }
+  }
+
+  useEffect(() => {
+    if (!entrepreneurId) return;
+    const refresh = () => {
+      if (!document.hidden) void fetchReport();
+    };
+    const onFinanceUpdated = (event: Event) => {
+      const custom = event as CustomEvent<{ entrepreneurId?: string }>;
+      if (!custom.detail?.entrepreneurId || custom.detail.entrepreneurId === entrepreneurId) {
+        refresh();
+      }
+    };
+    window.addEventListener(FINANCE_UPDATED_EVENT, onFinanceUpdated as EventListener);
+    window.addEventListener('focus', refresh);
+    const interval = window.setInterval(refresh, 45_000);
+    return () => {
+      window.removeEventListener(FINANCE_UPDATED_EVENT, onFinanceUpdated as EventListener);
+      window.removeEventListener('focus', refresh);
+      window.clearInterval(interval);
+    };
+  }, [entrepreneurId, startDate, endDate]);
+
   return (
     <Card className="p-6">
       {/* Header */}
@@ -135,26 +289,76 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
           <p className="text-sm text-gray-600 mt-1">
             Synthèse financière avec Total Produits, Total Charges et Bénéfice
           </p>
-        </div>
-        <Button 
-          variant="outline" 
-          size="sm" 
-          onClick={handleExportPDF}
-          disabled={exporting || !reportData}
-        >
-          {exporting ? (
-            <>
-              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              Génération...
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4 mr-2" />
-              Télécharger le rapport PDF
-            </>
+          {lastRefreshAt && (
+            <p className="text-xs text-gray-500 mt-1">
+              Dernière mise à jour: {new Date(lastRefreshAt).toLocaleTimeString('fr-FR')}
+            </p>
           )}
-        </Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleShareWhatsApp}
+            disabled={!reportData}
+          >
+            <MessageCircle className="w-4 h-4 mr-2" />
+            Partager WhatsApp
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={handleExportPDF}
+            disabled={exporting || !reportData}
+          >
+            {exporting ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                Génération...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4 mr-2" />
+                Télécharger le rapport PDF
+              </>
+            )}
+          </Button>
+        </div>
       </div>
+
+      {/* Rappels automatiques */}
+      <Card className="p-4 mb-6 bg-amber-50 border-amber-200">
+        <div className="flex items-center gap-2 mb-3">
+          <BellRing className="w-4 h-4 text-amber-700" />
+          <p className="text-sm font-semibold text-amber-900">Rappels automatiques</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant={remindersEnabled ? 'default' : 'outline'}
+            className={remindersEnabled ? 'bg-[#006666] hover:bg-[#004d4d]' : ''}
+            onClick={() => setRemindersEnabled((v) => !v)}
+          >
+            Fin de journée
+          </Button>
+          <Button
+            size="sm"
+            variant={rentReminderEnabled ? 'default' : 'outline'}
+            className={rentReminderEnabled ? 'bg-[#006666] hover:bg-[#004d4d]' : ''}
+            onClick={() => setRentReminderEnabled((v) => !v)}
+          >
+            Loyer / charges fixes
+          </Button>
+          <Button
+            size="sm"
+            variant={stockReminderEnabled ? 'default' : 'outline'}
+            className={stockReminderEnabled ? 'bg-[#006666] hover:bg-[#004d4d]' : ''}
+            onClick={() => setStockReminderEnabled((v) => !v)}
+          >
+            Contrôle stock
+          </Button>
+        </div>
+      </Card>
 
       {/* Sélecteur de période */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
@@ -209,6 +413,19 @@ export function FinancialReport({ entrepreneurId }: FinancialReportProps) {
         </div>
       ) : reportData ? (
         <div className="space-y-6">
+          {alerts.length > 0 && (
+            <Card className="p-4 bg-red-50 border-red-200">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertTriangle className="w-4 h-4 text-red-700" />
+                <p className="text-sm font-semibold text-red-900">Alertes intelligentes</p>
+              </div>
+              <ul className="space-y-1">
+                {alerts.map((a, idx) => (
+                  <li key={idx} className="text-sm text-red-800">- {a}</li>
+                ))}
+              </ul>
+            </Card>
+          )}
           {/* Période */}
           <div className="text-center p-4 bg-gray-50 rounded-lg">
             <p className="text-sm text-gray-600">Période du</p>
