@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { apiService, User } from '../services/api';
 import { NetworkError } from '../services/errorHandler';
 import { isSupabaseAuthActive } from '@/config';
-import { signInWithEmailPassword } from '@/services/supabaseAuth';
+import { signInOrProvisionQuickTestUser, signInWithEmailPassword } from '@/services/supabaseAuth';
 import {
   SUPABASE_QUICK_TEST_ROLES,
   getSupabaseTestPassword,
@@ -27,7 +27,7 @@ const useSupabaseLogin = isSupabaseAuthActive();
 /** Connexion rapide : uniquement avec Supabase Auth (comptes créés dans le dashboard). */
 const enableQuickSupabaseLogin =
   useSupabaseLogin &&
-  (import.meta.env.DEV || import.meta.env.VITE_ENABLE_TEST_LOGIN === 'true');
+  import.meta.env.VITE_ENABLE_TEST_LOGIN !== 'false';
 
 interface LoginFormProps {
   onLogin: (user: User) => void;
@@ -69,6 +69,9 @@ function formatSupabaseLoginError(err: unknown): string {
       "Identifiants refusés — crée les utilisateurs dans Supabase Auth " +
       "(voir supabaseQuickTest.ts) avec VITE_SUPABASE_TEST_PASSWORD et user_metadata.role."
     );
+  }
+  if (low.includes("email not confirmed")) {
+    return "Compte créé mais email non confirmé. Dans Supabase Auth, désactive 'Confirm email' pour les comptes de test.";
   }
   if (err instanceof Error) return err.message;
   return "Échec de connexion Supabase — vérifie URL, clé anon et les comptes.";
@@ -114,7 +117,11 @@ export function LoginForm({ onLogin, onOpenDemo }: LoginFormProps) {
     setIsLoading(true);
     setError('');
     try {
-      const { user } = await signInWithEmailPassword(testEmail, testPwd);
+      const { user } = await signInOrProvisionQuickTestUser({
+        email: testEmail,
+        password: testPwd,
+        role: quickRole,
+      });
       onLogin(user);
     } catch (err) {
       console.error('Connexion rapide Supabase:', err);
@@ -255,10 +262,10 @@ export function LoginForm({ onLogin, onOpenDemo }: LoginFormProps) {
             </CollapsibleTrigger>
             <CollapsibleContent className="space-y-3 px-4 pb-4 pt-0">
               <p className="text-xs text-slate-600">
-                Utilisateurs créés dans Supabase Authentication : même mot de passe (
+                Utilisateurs de test Supabase : même mot de passe (
                 <code className="rounded bg-white px-1 text-[11px]">VITE_SUPABASE_TEST_PASSWORD</code>
-                ) et <code className="rounded bg-white px-1 text-[11px]">user_metadata.role</code>{' '}
-                selon le rôle choisi.
+                ) et <code className="rounded bg-white px-1 text-[11px]">user_metadata.role</code>.
+                Si le compte n'existe pas encore, l'app essaie de le créer automatiquement au premier clic.
               </p>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <select

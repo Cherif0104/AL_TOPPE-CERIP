@@ -71,6 +71,59 @@ export async function signInWithEmailPassword(
   return { user: supabaseUserToAppUser(data.user), session: data.session };
 }
 
+function isInvalidLoginLikeError(message: string): boolean {
+  const low = (message || "").toLowerCase();
+  return (
+    low.includes("invalid login") ||
+    low.includes("invalid credentials") ||
+    low.includes("email not confirmed") ||
+    low.includes("user not found")
+  );
+}
+
+/**
+ * Connexion rapide de test:
+ * - tente d'abord une connexion;
+ * - si le compte n'existe pas, essaie de le créer puis reconnecte.
+ */
+export async function signInOrProvisionQuickTestUser(params: {
+  email: string;
+  password: string;
+  role: User["role"];
+}): Promise<{ user: User; session: Session }> {
+  const sb = getSupabase();
+  if (!sb) {
+    throw new Error("Supabase non configuré (VITE_SUPABASE_URL / ANON_KEY).");
+  }
+
+  try {
+    return await signInWithEmailPassword(params.email, params.password);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (!isInvalidLoginLikeError(message)) throw error;
+  }
+
+  const roleDisplay = ROLE_DISPLAY[params.role] || params.role;
+  const signUpResult = await sb.auth.signUp({
+    email: params.email,
+    password: params.password,
+    options: {
+      data: {
+        role: params.role,
+        full_name: `Compte test ${roleDisplay}`,
+        language: "fr",
+      },
+    },
+  });
+
+  if (signUpResult.error) {
+    throw signUpResult.error;
+  }
+
+  const secondTry = await signInWithEmailPassword(params.email, params.password);
+  return secondTry;
+}
+
 export async function signOutSupabase(): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
