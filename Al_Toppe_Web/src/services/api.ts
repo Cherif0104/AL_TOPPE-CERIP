@@ -170,6 +170,29 @@ export interface ApiError {
   details?: any;
 }
 
+export interface StructuredCaptureTransaction {
+  type: "income" | "expense";
+  amount: number;
+  category_name?: string;
+  title?: string;
+  description?: string;
+  date?: string;
+  payment_method?: "cash" | "orange_money" | "wave" | "virement";
+  client_supplier?: string;
+  invoice_number?: string;
+}
+
+export interface StructuredCaptureAnalysis {
+  success: boolean;
+  intent?: string;
+  voice_response?: string;
+  confidence?: number;
+  warnings?: string[];
+  needs_confirmation?: boolean;
+  transactions?: StructuredCaptureTransaction[];
+  extracted_text?: string;
+}
+
 /** GET lecture : erreur réseau / serveur injoignable → liste vide plutôt que throw. */
 function isBenignCoachingReadFailure(error: unknown): boolean {
   if (typeof TypeError !== "undefined" && error instanceof TypeError) return true;
@@ -266,9 +289,39 @@ class ApiService {
     useCache = true,
   ): Promise<T> {
     this.syncTokenFromStorage();
+    const isReplay =
+      typeof options.headers === "object" &&
+      options.headers != null &&
+      "X-Sync-Replay" in (options.headers as Record<string, unknown>);
     if (isSupabaseDataBackend()) {
-      const data = await supabaseMakeRequest<T>(endpoint, options);
-      return data;
+      try {
+        const data = await supabaseMakeRequest<T>(endpoint, options);
+        return data;
+      } catch (error) {
+        if (
+          !isReplay &&
+          options.method &&
+          ["POST", "PUT", "PATCH", "DELETE"].includes(options.method) &&
+          (!navigator.onLine || ErrorHandler.isOfflineMode())
+        ) {
+          cacheService.addPendingSync({
+            method: options.method,
+            endpoint,
+            data: options.body ? JSON.parse(options.body as string) : null,
+            timestamp: Date.now(),
+          });
+        }
+        const apiError = ErrorHandler.handleApiError(
+          error,
+          `${options.method || "GET"} ${endpoint}`,
+        );
+        throw new NetworkError(
+          apiError.message,
+          apiError.status,
+          apiError.code,
+          apiError.details,
+        );
+      }
     }
     if (isLocalDataBackend()) {
       return await localMakeRequest<T>(endpoint, options);
@@ -501,6 +554,39 @@ class ApiService {
   // Méthode publique pour faire des requêtes génériques
   async request<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
     return await this.makeRequest<T>(endpoint, options);
+  }
+
+  async analyzeQuickCapture(text: string): Promise<StructuredCaptureAnalysis> {
+    return await this.makeRequest<StructuredCaptureAnalysis>("/ai/text/analyze/", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  async createCashflowFromCapture(payload: {
+    entrepreneur_id: string;
+    source_text: string;
+    transactions: StructuredCaptureTransaction[];
+  }): Promise<{
+    success: boolean;
+    parsed_count: number;
+    created_count: number;
+    created_entries: Record<string, unknown>[];
+  }> {
+    return await this.makeRequest("/ai/capture/to-cashflow/", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, false);
+  }
+
+  async analyzeExpenseImage(payload: {
+    image_base64: string;
+    filename?: string;
+  }): Promise<StructuredCaptureAnalysis> {
+    return await this.makeRequest<StructuredCaptureAnalysis>("/ai/ocr/expense/", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }, false);
   }
 
   async getFinanceCategories(): Promise<Array<{ id: string; name: string; type: "income" | "expense" }>> {

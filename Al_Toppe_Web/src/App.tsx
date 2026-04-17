@@ -19,6 +19,7 @@ import { PortfolioManagement } from './components/PortfolioManagement';
 import { BusinessPlansManagement } from './components/BusinessPlansManagement';
 import { EntrepreneurProfile } from './components/EntrepreneurProfile';
 import { EntrepreneurQuickCapture } from './components/EntrepreneurQuickCapture';
+import { FinancialReport } from './components/FinancialReport';
 import { DemoPresentation } from './components/DemoPresentation';
 import { apiService, User } from './services/api';
 import { NetworkError } from './services/errorHandler';
@@ -28,6 +29,7 @@ import {
   sessionToAppUser,
   signOutSupabase,
 } from './services/supabaseAuth';
+import { ensureEntrepreneurRecordIdForCurrentUser } from './services/supabaseCoaching';
 
 
 export default function App() {
@@ -37,6 +39,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [showWelcome, setShowWelcome] = useState(false);
   const [showDemoPresentation, setShowDemoPresentation] = useState(false);
+  const [linkedEntrepreneurId, setLinkedEntrepreneurId] = useState<string | null>(null);
+  const [isResolvingEntrepreneurLink, setIsResolvingEntrepreneurLink] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,26 +131,176 @@ export default function App() {
     setPageAction(action || null);
   };
 
+  const getEntrepreneurId = (targetUser: User): string | null => {
+    const id = targetUser?.entrepreneur?.id || linkedEntrepreneurId;
+    return id && String(id).trim() ? String(id) : null;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const resolveEntrepreneurLink = async () => {
+      const roleKey = (user?.role || '').toLowerCase();
+      if (!user || roleKey !== 'entrepreneur') {
+        if (!cancelled) {
+          setLinkedEntrepreneurId(null);
+          setIsResolvingEntrepreneurLink(false);
+        }
+        return;
+      }
+      if (user?.entrepreneur?.id) {
+        if (!cancelled) {
+          setLinkedEntrepreneurId(String(user.entrepreneur.id));
+          setIsResolvingEntrepreneurLink(false);
+        }
+        return;
+      }
+      if (!isSupabaseAuthActive()) {
+        if (!cancelled) {
+          setLinkedEntrepreneurId(null);
+          setIsResolvingEntrepreneurLink(false);
+        }
+        return;
+      }
+      if (!cancelled) setIsResolvingEntrepreneurLink(true);
+      try {
+        const id = await ensureEntrepreneurRecordIdForCurrentUser();
+        if (!cancelled) setLinkedEntrepreneurId(id ? String(id) : null);
+      } finally {
+        if (!cancelled) setIsResolvingEntrepreneurLink(false);
+      }
+    };
+    void resolveEntrepreneurLink();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
+
   const renderContent = () => {
     if (!user) return null;
 
     const roleKey = (user.role || 'entrepreneur').toLowerCase();
     switch (roleKey) {
       case 'entrepreneur':
+        {
+          const entrepreneurId = getEntrepreneurId(user);
+          const financeModuleEntrepreneurId = entrepreneurId || user.id;
         switch (currentPage) {
-          case 'dashboard': return <CoachDashboard user={user} />;
-          case 'activities':
+          case 'dashboard':
             return (
-              <div className="relative pb-36 min-h-screen">
-                <EntrepreneurProfile user={user} />
-                <EntrepreneurQuickCapture user={user} />
+              <div className="space-y-6">
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                  <h2 className="text-xl font-semibold text-gray-900">Espace Entrepreneur</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Suivez vos activites, vos sessions de coaching et vos resultats financiers.
+                  </p>
+                </div>
+                <div className="relative pb-36 min-h-screen">
+                  <EntrepreneurProfile user={user} resolvedEntrepreneurId={entrepreneurId} />
+                  <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+                </div>
               </div>
             );
-          case 'sessions': return <SessionsManagement user={user} />;
-          case 'reports': return <CoachReports user={user} />;
-          default: return <CoachDashboard user={user} />;
+          case 'activities':
+            return (
+              <div className="space-y-6">
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                  <h2 className="text-xl font-semibold text-gray-900">Mes Activites</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Gérez vos activites en cours et capturez vos mises a jour terrain.
+                  </p>
+                </div>
+                <EntrepreneurProfile
+                  user={user}
+                  resolvedEntrepreneurId={entrepreneurId}
+                  showIdentity={false}
+                  showActivities={true}
+                  showSessions={false}
+                  showLocations={true}
+                />
+                <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+              </div>
+            );
+          case 'finances':
+            if (isResolvingEntrepreneurLink) {
+              return (
+                <div className="bg-white border border-gray-200 rounded-xl p-5 text-sm text-gray-600">
+                  Initialisation du profil entrepreneur...
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-6 relative pb-36">
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                  <h2 className="text-xl font-semibold text-gray-900">Mes Finances</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Suivez vos indicateurs financiers et le journal de transactions.
+                  </p>
+                </div>
+                {!entrepreneurId && (
+                  <div className="bg-white border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+                    Le profil est en cours de synchronisation. Le module financier reste accessible et se mettra à jour automatiquement.
+                  </div>
+                )}
+                <FinancialReport entrepreneurId={financeModuleEntrepreneurId} />
+                <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+              </div>
+            );
+          case 'sessions':
+            return (
+              <div className="space-y-6 relative pb-36">
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                  <h2 className="text-xl font-semibold text-gray-900">Sessions de coaching</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Consultez vos sessions planifiees, en cours et terminees.
+                  </p>
+                </div>
+                <EntrepreneurProfile
+                  user={user}
+                  resolvedEntrepreneurId={entrepreneurId}
+                  showIdentity={false}
+                  showActivities={false}
+                  showSessions={true}
+                  showLocations={false}
+                />
+                <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+              </div>
+            );
+          case 'reports':
+            if (isResolvingEntrepreneurLink) {
+              return (
+                <div className="bg-white border border-gray-200 rounded-xl p-5 text-sm text-gray-600">
+                  Initialisation du profil entrepreneur...
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-6 relative pb-36">
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                  <h2 className="text-xl font-semibold text-gray-900">Mes Rapports</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Exportez vos syntheses financieres et auditez vos transactions.
+                  </p>
+                </div>
+                {!entrepreneurId && (
+                  <div className="bg-white border border-blue-200 rounded-xl p-4 text-sm text-blue-800">
+                    Le profil est en cours de synchronisation. Les rapports sont disponibles et seront consolidés après liaison complète.
+                  </div>
+                )}
+                <FinancialReport entrepreneurId={financeModuleEntrepreneurId} />
+                <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+              </div>
+            );
+          default:
+            return (
+              <div className="relative pb-36 min-h-screen">
+                <EntrepreneurProfile user={user} resolvedEntrepreneurId={entrepreneurId} />
+                <EntrepreneurQuickCapture user={user} resolvedEntrepreneurId={entrepreneurId} />
+              </div>
+            );
         }
+      }
       case 'coach':
+      case 'formateur':
         switch (currentPage) {
           case 'dashboard': return <CoachDashboard user={user} onPageChange={handlePageChange} />;
           case 'entrepreneurs': return <EntrepreneursManagement user={user} initialAction={pageAction} onActionHandled={() => setPageAction(null)} />;

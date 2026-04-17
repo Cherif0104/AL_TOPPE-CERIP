@@ -182,7 +182,10 @@ class CoachViewSet(viewsets.ModelViewSet):
         coach = self.get_object()  # Récupère le coach depuis l'URL /coaches/<id>/
         
         # Récupérer les entrepreneurs liés à ce coach
-        assignments = CoachAssignment.objects.filter(coach=coach).select_related('entrepreneur')
+        assignments = CoachAssignment.objects.filter(
+            coach=coach,
+            status='active'
+        ).select_related('entrepreneur')
         entrepreneurs = [a.entrepreneur for a in assignments if a.entrepreneur]
 
         # Sérialiser les entrepreneurs

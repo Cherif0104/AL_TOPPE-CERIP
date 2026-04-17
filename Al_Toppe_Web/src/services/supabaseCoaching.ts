@@ -9,6 +9,11 @@ function client() {
 
 const autoCreateCooldownByUid = new Map<string, number>();
 const AUTO_CREATE_COOLDOWN_MS = 60_000;
+let supportsEntrepreneurUserIdColumn: boolean | null = null;
+let supportsProfilesEntrepreneurIdLookup: boolean | null = null;
+let canAutoCreateEntrepreneurRecord: boolean | null = null;
+const ensureRecordInFlightByUid = new Map<string, Promise<string | null>>();
+const ENABLE_ENTREPRENEUR_AUTO_LINK = false;
 
 function isPermissionDenied(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
@@ -23,6 +28,27 @@ function isPermissionDenied(error: unknown): boolean {
     message.includes("row-level security") ||
     details.includes("row-level security")
   );
+}
+
+function isMissingColumnError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; message?: string; details?: string };
+  const code = String(e.code || "").toLowerCase();
+  const message = String(e.message || "").toLowerCase();
+  const details = String(e.details || "").toLowerCase();
+  return (
+    code === "42703" ||
+    message.includes("column") && message.includes("does not exist") ||
+    details.includes("column") && details.includes("does not exist")
+  );
+}
+
+function isBadRequestLike(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; status?: number; message?: string };
+  const code = String(e.code || "").toLowerCase();
+  const message = String(e.message || "").toLowerCase();
+  return e.status === 400 || code.startsWith("pgrst") || message.includes("bad request");
 }
 
 async function authUid(): Promise<string> {
@@ -340,16 +366,31 @@ export async function getEntrepreneurRecord(id: string) {
 }
 
 export async function getEntrepreneurRecordIdForCurrentUser(): Promise<string | null> {
+  if (!ENABLE_ENTREPRENEUR_AUTO_LINK) {
+    return null;
+  }
   try {
     const uid = await authUid();
     const sb = client();
-    const { data, error } = await sb
-      .from("altoppe_entrepreneurs")
-      .select("id")
-      .eq("entrepreneur_user_id", uid)
+    if (supportsProfilesEntrepreneurIdLookup === false) {
+      return null;
+    }
+    const { data: profileData, error: profileError } = await sb
+      .from("profiles")
+      .select("entrepreneur_id")
+      .eq("id", uid)
       .maybeSingle();
-    if (error) return null;
-    return data?.id ? String(data.id) : null;
+    if (profileError) {
+      if (isMissingColumnError(profileError) || isBadRequestLike(profileError)) {
+        supportsProfilesEntrepreneurIdLookup = false;
+      }
+      return null;
+    }
+    supportsProfilesEntrepreneurIdLookup = true;
+    if (!profileError && profileData?.entrepreneur_id) {
+      return String(profileData.entrepreneur_id);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -371,13 +412,26 @@ function splitFullName(fullName: string): { firstName: string; lastName: string 
  * Retourne l'id existant ou créé.
  */
 export async function ensureEntrepreneurRecordIdForCurrentUser(): Promise<string | null> {
-  const existingId = await getEntrepreneurRecordIdForCurrentUser();
-  if (existingId) return existingId;
-
+  if (!ENABLE_ENTREPRENEUR_AUTO_LINK) {
+    return null;
+  }
   const sb = client();
   const { data: authData, error: authError } = await sb.auth.getUser();
   if (authError || !authData.user?.id) return null;
   const uid = authData.user.id;
+
+  const inFlight = ensureRecordInFlightByUid.get(uid);
+  if (inFlight) {
+    return await inFlight;
+  }
+
+  const runner = (async (): Promise<string | null> => {
+    const existingId = await getEntrepreneurRecordIdForCurrentUser();
+    if (existingId) return existingId;
+
+  if (canAutoCreateEntrepreneurRecord === false) {
+    return null;
+  }
   const cooldownUntil = autoCreateCooldownByUid.get(uid) ?? 0;
   if (Date.now() < cooldownUntil) {
     return null;
@@ -388,8 +442,7 @@ export async function ensureEntrepreneurRecordIdForCurrentUser(): Promise<string
     String(meta.full_name || meta.name || authData.user.email?.split("@")[0] || "").trim();
   const { firstName, lastName } = splitFullName(fullName);
 
-  const payload = {
-    entrepreneur_user_id: uid,
+  const basePayload = {
     first_name: firstName,
     last_name: lastName,
     email: authData.user.email || null,
@@ -397,19 +450,57 @@ export async function ensureEntrepreneurRecordIdForCurrentUser(): Promise<string
     status: "Nouveau",
   };
 
-  const { data: created, error: insertError } = await sb
+  const insertPayload =
+    supportsEntrepreneurUserIdColumn === false
+      ? basePayload
+      : { ...basePayload, entrepreneur_user_id: uid };
+
+  let created: { id?: string } | null = null;
+  let insertError: unknown = null;
+
+  const firstInsert = await sb
     .from("altoppe_entrepreneurs")
-    .insert(payload)
+    .insert(insertPayload)
     .select("id")
     .single();
+  created = firstInsert.data as { id?: string } | null;
+  insertError = firstInsert.error;
+
+  if (insertError && isMissingColumnError(insertError)) {
+    supportsEntrepreneurUserIdColumn = false;
+    const retryInsert = await sb
+      .from("altoppe_entrepreneurs")
+      .insert(basePayload)
+      .select("id")
+      .single();
+    created = retryInsert.data as { id?: string } | null;
+    insertError = retryInsert.error;
+  } else if (!insertError) {
+    supportsEntrepreneurUserIdColumn = true;
+    canAutoCreateEntrepreneurRecord = true;
+  }
 
   if (insertError) {
+    canAutoCreateEntrepreneurRecord = false;
+    autoCreateCooldownByUid.set(uid, Date.now() + AUTO_CREATE_COOLDOWN_MS);
     if (isPermissionDenied(insertError)) {
-      autoCreateCooldownByUid.set(uid, Date.now() + AUTO_CREATE_COOLDOWN_MS);
       return null;
     }
-    // Si conflit/insert échoue, tenter une relecture simple.
-    return await getEntrepreneurRecordIdForCurrentUser();
+    // Schéma Supabase hétérogène côté client: on n'insiste pas pour éviter le spam réseau.
+    return null;
   }
-  return created?.id ? String(created.id) : null;
+  const createdId = created?.id ? String(created.id) : null;
+  if (createdId) {
+    // Liaison best-effort du profil auth -> dossier entrepreneur.
+    await sb.from("profiles").update({ entrepreneur_id: createdId }).eq("id", uid);
+  }
+  return createdId;
+  })();
+
+  ensureRecordInFlightByUid.set(uid, runner);
+  try {
+    return await runner;
+  } finally {
+    ensureRecordInFlightByUid.delete(uid);
+  }
 }

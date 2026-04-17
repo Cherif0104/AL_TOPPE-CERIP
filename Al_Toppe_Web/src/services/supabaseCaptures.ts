@@ -5,6 +5,11 @@ export type QuickCaptureSyncPayload = {
   kind: "need" | "idea" | "task" | "voice";
   text: string;
   durationSec?: number;
+  status?: "parsed" | "confirmed" | "persisted" | "failed";
+  aiSummary?: string;
+  sourceText?: string;
+  transactionsCount?: number;
+  createdEntryIds?: string[];
 };
 
 /**
@@ -19,13 +24,36 @@ export async function syncQuickCaptureToSupabase(item: QuickCaptureSyncPayload):
   const uid = sessionData.session?.user?.id;
   if (!uid) return;
 
-  const { error } = await sb.from("altoppe_quick_captures").insert({
+  const row = {
     user_id: uid,
     kind: item.kind,
     text_content: item.text,
     duration_sec: item.durationSec ?? null,
     audio_storage_path: null,
-  });
+    status: item.status ?? null,
+    ai_summary: item.aiSummary ?? null,
+    source_text: item.sourceText ?? null,
+    transactions_count: item.transactionsCount ?? null,
+    created_entry_ids: Array.isArray(item.createdEntryIds) ? item.createdEntryIds : null,
+    metadata: {
+      status: item.status ?? "parsed",
+      transactions_count: item.transactionsCount ?? 0,
+    },
+  };
+
+  let { error } = await sb.from("altoppe_quick_captures").insert(row);
+  if (error) {
+    // Fallback minimal pour les schémas qui n'ont pas encore les colonnes enrichies.
+    const fallback = {
+      user_id: uid,
+      kind: item.kind,
+      text_content: item.text,
+      duration_sec: item.durationSec ?? null,
+      audio_storage_path: null,
+    };
+    const retry = await sb.from("altoppe_quick_captures").insert(fallback);
+    error = retry.error;
+  }
 
   if (error) {
     console.warn("[supabaseCaptures] insert altoppe_quick_captures:", error.message);

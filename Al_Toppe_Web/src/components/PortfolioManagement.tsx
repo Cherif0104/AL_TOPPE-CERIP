@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -38,12 +38,34 @@ import {
   AlertCircle,
   CheckCircle
 } from 'lucide-react';
+import { apiService } from '@/services/api';
 
 export function PortfolioManagement() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSector, setFilterSector] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [timeRange, setTimeRange] = useState('last_year');
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [remoteInvestments, setRemoteInvestments] = useState<Array<Record<string, unknown>>>([]);
+
+  useEffect(() => {
+    const load = async () => {
+      setIsLoading(true);
+      setLoadError(null);
+      try {
+        const raw = await apiService.request<unknown>('/business-plans/');
+        const plans = Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+        setRemoteInvestments(plans);
+      } catch (e) {
+        console.error(e);
+        setLoadError("Lecture Supabase indisponible, fallback local.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    void load();
+  }, []);
 
   // Données mockées du portfolio
   const investments = [
@@ -144,31 +166,89 @@ export function PortfolioManagement() {
     }
   ];
 
-  // Données pour les graphiques
-  const portfolioPerformance = [
-    { month: 'Jan', total_value: 18500000, investments: 5, roi: 45 },
-    { month: 'Fév', total_value: 20200000, investments: 6, roi: 52 },
-    { month: 'Mar', total_value: 22800000, investments: 7, roi: 58 },
-    { month: 'Avr', total_value: 24500000, investments: 8, roi: 62 },
-    { month: 'Mai', total_value: 26800000, investments: 9, roi: 67 },
-    { month: 'Jun', total_value: 28200000, investments: 10, roi: 71 },
-    { month: 'Jul', total_value: 29800000, investments: 11, roi: 74 },
-    { month: 'Aoû', total_value: 31500000, investments: 12, roi: 78 },
-    { month: 'Sep', total_value: 32000000, investments: 12, roi: 75 }
-  ];
+  const sourceInvestments = useMemo(() => {
+    if (!remoteInvestments.length) return investments;
+    return remoteInvestments.map((p, idx) => {
+      const projections =
+        (p.financial_projections as Record<string, unknown> | undefined) || {};
+      const requested = Number(projections.requested_amount || 0);
+      const distributed = Number(projections.distributed_amount || requested || 0);
+      const currentValue = distributed > 0 ? distributed : requested;
+      const roi = requested > 0 ? Math.round(((currentValue - requested) / requested) * 100) : 0;
+      const sector = String(p.sector_display || 'Services');
+      return {
+        id: idx + 1,
+        entrepreneur: String(p.entrepreneur_name || `Entrepreneur ${idx + 1}`),
+        business: String(p.activity_title || p.title || 'Activité'),
+        sector,
+        location: 'Sénégal',
+        initial_investment: requested || 1_000_000,
+        current_valuation: currentValue || 1_000_000,
+        investment_date: String(p.created_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+        status: roi >= 90 ? 'high_performing' : roi < 0 ? 'underperforming' : 'performing',
+        roi,
+        revenue_growth: Number(projections.revenue_growth || Math.max(0, roi)),
+        employees: Number(projections.employees || 0),
+        milestones_achieved: Number(p.is_validated ? 4 : 2),
+        milestones_total: 5,
+        last_update: String(p.updated_at || '').slice(0, 10) || new Date().toISOString().slice(0, 10),
+        risk_level: roi < 0 ? 'high' : roi < 35 ? 'medium' : 'low',
+        next_milestone: String(p.is_validated ? 'Passage à l’échelle' : 'Validation et financement'),
+      };
+    });
+  }, [remoteInvestments]);
 
-  const sectorAllocation = [
-    { name: 'Commerce', value: 35, amount: 11200000, color: '#006666' },
-    { name: 'Technologie', value: 30, amount: 9600000, color: '#FF9933' },
-    { name: 'Agriculture', value: 20, amount: 6400000, color: '#28A745' },
-    { name: 'Services', value: 15, amount: 4800000, color: '#0088CC' }
-  ];
+  const portfolioPerformance = useMemo(() => {
+    const labels = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep'];
+    return labels.map((month, idx) => {
+      const count = Math.max(1, Math.round((sourceInvestments.length * (idx + 1)) / labels.length));
+      const slice = sourceInvestments.slice(0, count);
+      const totalValue = slice.reduce((sum, inv) => sum + inv.current_valuation, 0);
+      const avgRoi = slice.length
+        ? Math.round(slice.reduce((sum, inv) => sum + inv.roi, 0) / slice.length)
+        : 0;
+      return { month, total_value: totalValue, investments: count, roi: avgRoi };
+    });
+  }, [sourceInvestments]);
 
-  const riskDistribution = [
-    { level: 'Faible', count: 3, percentage: 60, color: '#28A745' },
-    { level: 'Moyen', count: 1, percentage: 20, color: '#FF9933' },
-    { level: 'Élevé', count: 1, percentage: 20, color: '#DC3545' }
-  ];
+  const sectorAllocation = useMemo(() => {
+    const colorBySector: Record<string, string> = {
+      Commerce: '#006666',
+      Technologie: '#FF9933',
+      Agriculture: '#28A745',
+      Services: '#0088CC',
+      Artisanat: '#7C3AED',
+    };
+    const totals = sourceInvestments.reduce<Record<string, number>>((acc, inv) => {
+      acc[inv.sector] = (acc[inv.sector] || 0) + inv.current_valuation;
+      return acc;
+    }, {});
+    const grandTotal = Math.max(1, Object.values(totals).reduce((a, b) => a + b, 0));
+    return Object.entries(totals).map(([name, amount]) => ({
+      name,
+      amount,
+      value: Math.round((amount / grandTotal) * 100),
+      color: colorBySector[name] || '#6B7280',
+    }));
+  }, [sourceInvestments]);
+
+  const riskDistribution = useMemo(() => {
+    const buckets = [
+      { level: 'Faible', key: 'low', color: '#28A745' },
+      { level: 'Moyen', key: 'medium', color: '#FF9933' },
+      { level: 'Élevé', key: 'high', color: '#DC3545' },
+    ];
+    const total = Math.max(1, sourceInvestments.length);
+    return buckets.map((bucket) => {
+      const count = sourceInvestments.filter((inv) => inv.risk_level === bucket.key).length;
+      return {
+        level: bucket.level,
+        count,
+        percentage: Math.round((count / total) * 100),
+        color: bucket.color,
+      };
+    });
+  }, [sourceInvestments]);
 
   const getStatusBadge = (status: string) => {
     const config = {
@@ -214,7 +294,7 @@ export function PortfolioManagement() {
     }).format(amount).replace('XOF', 'FCFA');
   };
 
-  const filteredInvestments = investments.filter(investment => {
+  const filteredInvestments = sourceInvestments.filter(investment => {
     const matchesSearch = investment.entrepreneur.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          investment.business.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSector = filterSector === 'all' || investment.sector === filterSector;
@@ -224,17 +304,21 @@ export function PortfolioManagement() {
   });
 
   const stats = {
-    totalInvestments: investments.length,
-    totalValue: investments.reduce((sum, inv) => sum + inv.current_valuation, 0),
-    totalInvested: investments.reduce((sum, inv) => sum + inv.initial_investment, 0),
-    avgROI: Math.round(investments.reduce((sum, inv) => sum + inv.roi, 0) / investments.length),
-    totalEmployees: investments.reduce((sum, inv) => sum + inv.employees, 0),
-    highPerforming: investments.filter(inv => inv.status === 'high_performing').length,
-    atRisk: investments.filter(inv => inv.status === 'underperforming' || inv.status === 'at_risk').length
+    totalInvestments: sourceInvestments.length,
+    totalValue: sourceInvestments.reduce((sum, inv) => sum + inv.current_valuation, 0),
+    totalInvested: sourceInvestments.reduce((sum, inv) => sum + inv.initial_investment, 0),
+    avgROI: sourceInvestments.length
+      ? Math.round(sourceInvestments.reduce((sum, inv) => sum + inv.roi, 0) / sourceInvestments.length)
+      : 0,
+    totalEmployees: sourceInvestments.reduce((sum, inv) => sum + inv.employees, 0),
+    highPerforming: sourceInvestments.filter(inv => inv.status === 'high_performing').length,
+    atRisk: sourceInvestments.filter(inv => inv.status === 'underperforming' || inv.status === 'at_risk').length
   };
 
   return (
     <div className="space-y-6">
+      {isLoading && <Card className="p-3 text-sm text-gray-600">Chargement du portfolio...</Card>}
+      {loadError && <Card className="p-3 text-sm text-amber-700">{loadError}</Card>}
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -402,7 +486,7 @@ export function PortfolioManagement() {
           <Card className="p-6">
             <h3 className="font-semibold text-gray-900 mb-4">Top performers</h3>
             <div className="space-y-4">
-              {investments
+              {[...sourceInvestments]
                 .sort((a, b) => b.roi - a.roi)
                 .slice(0, 5)
                 .map((investment, index) => (
@@ -581,7 +665,7 @@ export function PortfolioManagement() {
             <Card className="p-6">
               <h3 className="font-semibold text-gray-900 mb-4">Alertes et recommandations</h3>
               <div className="space-y-3">
-                {investments
+                {sourceInvestments
                   .filter(inv => inv.risk_level === 'high' || inv.roi < 0)
                   .map((investment) => (
                   <div key={investment.id} className="p-3 border border-red-200 rounded-lg bg-red-50">
@@ -598,7 +682,7 @@ export function PortfolioManagement() {
                   </div>
                 ))}
                 
-                {investments.filter(inv => inv.risk_level === 'high' || inv.roi < 0).length === 0 && (
+                {sourceInvestments.filter(inv => inv.risk_level === 'high' || inv.roi < 0).length === 0 && (
                   <div className="p-3 border border-green-200 rounded-lg bg-green-50">
                     <div className="flex items-center space-x-3">
                       <CheckCircle className="w-5 h-5 text-green-600" />

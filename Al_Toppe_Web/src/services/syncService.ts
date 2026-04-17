@@ -7,7 +7,7 @@ export interface SyncOperation {
   id: string;
   method: string;
   endpoint: string;
-  data: any;
+  data: unknown;
   timestamp: number;
   retries: number;
   maxRetries: number;
@@ -97,11 +97,13 @@ export class SyncService {
   // Synchroniser une seule opération
   private async syncSingleOperation(operation: SyncOperation): Promise<void> {
     const { method, endpoint, data } = operation;
+    const replayHeaders = { "X-Sync-Replay": "1" };
 
     switch (method.toUpperCase()) {
       case 'POST':
         await apiService['makeRequest'](endpoint, {
           method: 'POST',
+          headers: replayHeaders,
           body: JSON.stringify(data)
         });
         break;
@@ -109,6 +111,7 @@ export class SyncService {
       case 'PUT':
         await apiService['makeRequest'](endpoint, {
           method: 'PUT',
+          headers: replayHeaders,
           body: JSON.stringify(data)
         });
         break;
@@ -116,13 +119,15 @@ export class SyncService {
       case 'PATCH':
         await apiService['makeRequest'](endpoint, {
           method: 'PATCH',
+          headers: replayHeaders,
           body: JSON.stringify(data)
         });
         break;
 
       case 'DELETE':
         await apiService['makeRequest'](endpoint, {
-          method: 'DELETE'
+          method: 'DELETE',
+          headers: replayHeaders
         });
         break;
 

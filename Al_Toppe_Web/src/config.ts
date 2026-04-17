@@ -82,3 +82,39 @@ export function isSupabaseDataBackend(): boolean {
   return getDataBackendMode() === "supabase";
 }
 
+/**
+ * Provider IA pour la capture entrepreneur.
+ * - local  : parseur local embarqué (fallback robuste)
+ * - edenai : appel Eden AI (clé requise)
+ */
+export type AiProviderMode = "local" | "edenai";
+
+export function getAiProviderMode(): AiProviderMode {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const raw = String((import.meta as any).env?.VITE_AI_PROVIDER ?? "local")
+    .trim()
+    .toLowerCase();
+  if (raw === "edenai") return "edenai";
+  return "local";
+}
+
+export const EDENAI_API_KEY: string =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  String((import.meta as any).env?.VITE_EDENAI_API_KEY ?? "").trim();
+
+export const EDENAI_API_BASE_URL: string =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  String((import.meta as any).env?.VITE_EDENAI_API_BASE_URL ?? "https://api.edenai.run/v2").trim();
+
+export const EDENAI_CHAT_PROVIDER: string =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  String((import.meta as any).env?.VITE_EDENAI_CHAT_PROVIDER ?? "openai").trim();
+
+export const EDENAI_CHAT_MODEL: string =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  String((import.meta as any).env?.VITE_EDENAI_CHAT_MODEL ?? "gpt-4o-mini").trim();
+
+export function isEdenAiConfigured(): boolean {
+  return getAiProviderMode() === "edenai" && Boolean(EDENAI_API_KEY);
+}
+

@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Users, Settings, DollarSign, BarChart3, Bell, User, LogOut, Home, Building, FileText, Menu, X, Check } from 'lucide-react';
+import { Users, Settings, DollarSign, BarChart3, Bell, User, LogOut, Home, Building, FileText, Menu, X, Check, Wallet } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { getCurrentLang, setCurrentLang, t, type SupportedLang } from '@/services/i18n';
 
 // Types
 interface UserType {
@@ -20,6 +21,7 @@ interface NavigationProps {
 
 export function Navigation({ currentRole, currentPage, user, onPageChange, onLogout }: NavigationProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [lang, setLang] = useState<SupportedLang>(() => getCurrentLang(user?.language));
   const [notifications, setNotifications] = useState([
     { id: 1, title: 'Nouvelle session', description: 'Une nouvelle session a été planifiée pour demain.', time: 'il y a 5 min', isRead: false },
     { id: 2, title: 'Rapport mensuel', description: 'Votre rapport de performance mensuel est prêt.', time: 'il y a 2 heures', isRead: false },
@@ -34,49 +36,50 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
 
   const roleConfig = {
     entrepreneur: {
-      name: 'Entrepreneur',
+      name: t('role.entrepreneur', lang),
       color: 'bg-[#006666]',
       icon: Building,
       menuItems: [
-        { id: 'dashboard', label: 'Tableau de bord', icon: Home },
-        { id: 'activities', label: 'Mes Activités', icon: Building },
-        { id: 'sessions', label: 'Sessions Coach', icon: Users },
-        { id: 'reports', label: 'Mes Rapports', icon: FileText },
+        { id: 'dashboard', label: t('menu.dashboard', lang), icon: Home },
+        { id: 'activities', label: t('menu.activities', lang), icon: Building },
+        { id: 'finances', label: t('menu.finances', lang), icon: Wallet },
+        { id: 'sessions', label: t('menu.sessions', lang), icon: Users },
+        { id: 'reports', label: t('menu.reports', lang), icon: FileText },
       ],
     },
     coach: {
-      name: 'Coach',
+      name: t('role.coach', lang),
       color: 'bg-[#006666]',
       icon: Users,
       menuItems: [
-        { id: 'dashboard', label: 'Tableau de bord', icon: Home },
-        { id: 'entrepreneurs', label: 'Entrepreneurs', icon: Users },
-        { id: 'sessions', label: 'Sessions', icon: BarChart3 },
-        { id: 'business-plans', label: 'Plans d\'affaires', icon: FileText },
-        { id: 'reports', label: 'Rapports', icon: BarChart3 },
+        { id: 'dashboard', label: t('menu.dashboard', lang), icon: Home },
+        { id: 'entrepreneurs', label: t('menu.entrepreneurs', lang), icon: Users },
+        { id: 'sessions', label: t('menu.sessions', lang), icon: BarChart3 },
+        { id: 'business-plans', label: t('menu.businessPlans', lang), icon: FileText },
+        { id: 'reports', label: t('menu.reports', lang), icon: BarChart3 },
       ],
     },
     admin: {
-      name: 'Administrateur',
+      name: t('role.admin', lang),
       color: 'bg-[#FF9933]',
       icon: Settings,
       menuItems: [
-        { id: 'dashboard', label: 'Tableau de bord', icon: Home },
-        { id: 'users', label: 'Utilisateurs', icon: Users },
-        { id: 'business-plans', label: 'Plans d\'affaires', icon: FileText },
-        { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-        { id: 'settings', label: 'Paramètres', icon: Settings },
+        { id: 'dashboard', label: t('menu.dashboard', lang), icon: Home },
+        { id: 'users', label: t('menu.users', lang), icon: Users },
+        { id: 'business-plans', label: t('menu.businessPlans', lang), icon: FileText },
+        { id: 'analytics', label: t('menu.analytics', lang), icon: BarChart3 },
+        { id: 'settings', label: t('menu.settings', lang), icon: Settings },
       ],
     },
     bailleur: {
-      name: 'Bailleur',
+      name: t('role.bailleur', lang),
       color: 'bg-[#006666]',
       icon: DollarSign,
       menuItems: [
-        { id: 'dashboard', label: 'Tableau de bord', icon: Home },
-        { id: 'programs', label: 'Programmes', icon: DollarSign },
-        { id: 'applications', label: 'Candidatures', icon: Users },
-        { id: 'portfolio', label: 'Portfolio', icon: BarChart3 },
+        { id: 'dashboard', label: t('menu.dashboard', lang), icon: Home },
+        { id: 'programs', label: t('menu.programs', lang), icon: DollarSign },
+        { id: 'applications', label: t('menu.applications', lang), icon: Users },
+        { id: 'portfolio', label: t('menu.portfolio', lang), icon: BarChart3 },
       ],
     },
   };
@@ -85,6 +88,7 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
   const roleMap: Record<string, keyof typeof roleConfig> = {
     entrepreneur: 'entrepreneur',
     coach: 'coach',
+    formateur: 'coach',
     bailleur: 'bailleur',
     administrateur: 'admin',
     admin: 'admin',
@@ -112,7 +116,7 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
             </div>
             <div className="hidden sm:block">
               <h1 className="text-lg md:text-xl font-semibold text-gray-900 leading-tight">AL-TOPPE</h1>
-              <p className="text-xs text-gray-500">Gestion d'entreprise</p>
+              <p className="text-xs text-gray-500">{t('label.enterpriseMgmt', lang)}</p>
             </div>
           </div>
         </div>
@@ -140,6 +144,20 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
 
         {/* Desktop User Actions */}
         <div className="hidden lg:flex items-center space-x-4">
+          <select
+            value={lang}
+            onChange={(e) => {
+              const next = e.target.value as SupportedLang;
+              setLang(next);
+              setCurrentLang(next);
+            }}
+            className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700"
+            aria-label="Language"
+          >
+            <option value="fr">FR</option>
+            <option value="wo">WO</option>
+            <option value="pu">PU</option>
+          </select>
           <div className="flex items-center space-x-2 px-3 py-2 bg-[#006666]/10 rounded-lg">
             <CurrentIcon className="w-4 h-4 text-[#006666]" />
             <span className="text-sm font-medium text-[#006666]">{currentConfig.name}</span>
@@ -162,7 +180,7 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
                 {unreadCount > 0 && (
                   <button onClick={markAllAsRead} className="text-xs text-[#006666] hover:underline flex items-center gap-1">
                     <Check className="w-3 h-3" />
-                    Tout marquer comme lu
+                    {t('action.markAllRead', lang)}
                   </button>
                 )}
               </div>
@@ -219,7 +237,7 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
                 <h3 className="font-semibold text-gray-900">Notifications</h3>
                 {unreadCount > 0 && (
                   <button onClick={markAllAsRead} className="text-xs text-[#006666] hover:underline">
-                    Tout marquer comme lu
+                    {t('action.markAllRead', lang)}
                   </button>
                 )}
               </div>
@@ -286,7 +304,7 @@ export function Navigation({ currentRole, currentPage, user, onPageChange, onLog
               className="w-full flex items-center space-x-3 px-4 py-3 rounded-xl text-red-600 hover:bg-red-50 transition-all active:scale-95"
             >
               <LogOut className="w-5 h-5" />
-              <span className="text-base font-medium">Se déconnecter</span>
+              <span className="text-base font-medium">{t('action.logout', lang)}</span>
             </button>
           </div>
         </div>

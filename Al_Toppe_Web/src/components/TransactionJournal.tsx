@@ -615,6 +615,8 @@ export function TransactionJournal({
                           data={incomeCategoriesData}
                           dataKey="value"
                           nameKey="fullName"
+                          isAnimationActive={false}
+                          animationDuration={0}
                           cx="50%"
                           cy="50%"
                           innerRadius={70}
@@ -707,6 +709,8 @@ export function TransactionJournal({
                           data={expenseCategoriesData}
                           dataKey="value"
                           nameKey="fullName"
+                          isAnimationActive={false}
+                          animationDuration={0}
                           cx="50%"
                           cy="50%"
                           innerRadius={70}
@@ -819,8 +823,8 @@ export function TransactionJournal({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredTransactions.map((tx) => (
-                <TableRow key={tx.id} className="hover:bg-gray-50">
+              {filteredTransactions.map((tx, index) => (
+                <TableRow key={`${tx.id}-${index}`} className="hover:bg-gray-50">
                   <TableCell className="font-medium">
                     {formatDate(tx.date)}
                   </TableCell>
